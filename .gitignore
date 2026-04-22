@@ -1,2 +1,4 @@
 .DS_Store
 *.swp
+node_modules/
+htdocs/luci-static/resources/bandwidthbydevice/chart.min.js

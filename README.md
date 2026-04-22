@@ -35,6 +35,9 @@ opkg install luci-app-bandwidthbydevice
 ```sh
 # On your build machine:
 git clone https://github.com/priestc/BandwidthByDevice
+cd BandwidthByDevice
+npm install   # fetches Chart.js and copies chart.min.js into place automatically
+
 # Copy into your OpenWRT buildroot feeds/
 # Then: make menuconfig → LuCI → Applications → luci-app-bandwidthbydevice
 
@@ -55,9 +58,8 @@ chmod +x /usr/bin/bbd-collector /etc/init.d/bandwidthbydevice
 - `luci-base`
 - Chart.js (bundled — see note below)
 
-> **Chart.js**: The `htdocs/.../chart.min.js` file is not included in this repo.
-> Download it from the [Chart.js releases](https://github.com/chartjs/Chart.js/releases)
-> and place it at `htdocs/luci-static/resources/bandwidthbydevice/chart.min.js`.
+> **Chart.js** is not committed to the repo. Run `npm install` once after cloning and
+> the `postinstall` script will copy `chart.umd.min.js` into the correct location automatically.
 
 ## License
 

@@ -1,0 +1,12 @@
+{
+  "name": "luci-app-bandwidthbydevice",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Build tooling for BandwidthByDevice — copies vendored JS assets into place",
+  "scripts": {
+    "postinstall": "cp node_modules/chart.js/dist/chart.umd.min.js htdocs/luci-static/resources/bandwidthbydevice/chart.min.js"
+  },
+  "devDependencies": {
+    "chart.js": "^4.4.0"
+  }
+}

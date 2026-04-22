@@ -1,0 +1,143 @@
+#bbd-controls {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.9em;
+}
+
+#bbd-last-updated {
+  color: #888;
+}
+
+#bbd-device-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.bbd-device-card {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  background: #fff;
+}
+
+.bbd-device-name {
+  display: block;
+  font-weight: bold;
+  font-size: 1.05em;
+  text-decoration: none;
+  margin-bottom: 0.2rem;
+}
+
+.bbd-device-ip,
+.bbd-device-mac {
+  display: block;
+  font-size: 0.8em;
+  color: #666;
+}
+
+.bbd-rate-row {
+  display: flex;
+  gap: 1rem;
+  margin: 0.5rem 0 0.4rem;
+  font-size: 0.95em;
+}
+
+.bbd-down { color: #3b82f6; }
+.bbd-up   { color: #f59e0b; }
+
+.bbd-bar-track {
+  height: 5px;
+  background: #eee;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.bbd-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #6366f1);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.bbd-loading {
+  color: #888;
+  font-style: italic;
+}
+
+/* device detail */
+#bbd-device-header {
+  margin-bottom: 1.5rem;
+}
+
+#bbd-device-header a {
+  font-size: 0.9em;
+  color: #3b82f6;
+}
+
+#bbd-device-name {
+  margin: 0.4rem 0 0.2rem;
+}
+
+#bbd-device-meta {
+  color: #666;
+  font-size: 0.85em;
+  font-family: monospace;
+}
+
+.bbd-chart-section {
+  margin-bottom: 2rem;
+}
+
+.bbd-chart-section h4 {
+  margin-bottom: 0.5rem;
+}
+
+#bbd-history-tabs {
+  margin-bottom: 0.75rem;
+}
+
+.bbd-tab {
+  margin-right: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #f5f5f5;
+  cursor: pointer;
+  font-size: 0.85em;
+}
+
+.bbd-tab.active {
+  background: #3b82f6;
+  color: #fff;
+  border-color: #3b82f6;
+}
+
+.bbd-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.bbd-stat {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 0.75rem;
+  text-align: center;
+}
+
+.bbd-stat-label {
+  display: block;
+  font-size: 0.8em;
+  color: #888;
+  margin-bottom: 0.3rem;
+}
+
+.bbd-stat-value {
+  display: block;
+  font-size: 1.2em;
+  font-weight: bold;
+}

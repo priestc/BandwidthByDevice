@@ -1,0 +1,237 @@
+#!/bin/sh
+#
+# bbd-collector: Per-device bandwidth data collection daemon.
+#
+# Strategy:
+#   - Discover devices via ARP table
+#   - Create iptables accounting rules per device IP
+#   - Every INTERVAL seconds, read counters and write JSON
+#   - Flush per-interval counters after reading (delta mode)
+#   - Persist daily totals to /etc/bandwidthbydevice/
+
+INTERVAL=10
+RUNTIME_DIR="/tmp/bandwidthbydevice"
+PERSIST_DIR="/etc/bandwidthbydevice"
+CHAIN_IN="BBD_IN"
+CHAIN_OUT="BBD_OUT"
+
+mkdir -p "$RUNTIME_DIR" "$PERSIST_DIR"
+
+log() { logger -t bbd-collector "$*"; }
+
+# ---- iptables helpers -------------------------------------------------------
+
+setup_chains() {
+    iptables -N "$CHAIN_IN"  2>/dev/null
+    iptables -N "$CHAIN_OUT" 2>/dev/null
+    iptables -C FORWARD -j "$CHAIN_IN"  2>/dev/null || iptables -I FORWARD 1 -j "$CHAIN_IN"
+    iptables -C FORWARD -j "$CHAIN_OUT" 2>/dev/null || iptables -I FORWARD 2 -j "$CHAIN_OUT"
+}
+
+teardown_chains() {
+    iptables -D FORWARD -j "$CHAIN_IN"  2>/dev/null
+    iptables -D FORWARD -j "$CHAIN_OUT" 2>/dev/null
+    iptables -F "$CHAIN_IN"  2>/dev/null
+    iptables -F "$CHAIN_OUT" 2>/dev/null
+    iptables -X "$CHAIN_IN"  2>/dev/null
+    iptables -X "$CHAIN_OUT" 2>/dev/null
+}
+
+ensure_rules_for_ip() {
+    local ip="$1"
+    iptables -C "$CHAIN_IN"  -d "$ip" 2>/dev/null || \
+        iptables -A "$CHAIN_IN"  -d "$ip" -j RETURN
+    iptables -C "$CHAIN_OUT" -s "$ip" 2>/dev/null || \
+        iptables -A "$CHAIN_OUT" -s "$ip" -j RETURN
+}
+
+# ---- device discovery -------------------------------------------------------
+
+get_arp_devices() {
+    # Returns lines of: IP MAC
+    awk 'NR>1 && $3=="0x2" {print $1, $4}' /proc/net/arp
+}
+
+get_hostname() {
+    local ip="$1"
+    # Try to resolve via /tmp/dhcp.leases (dnsmasq) first
+    local name
+    name=$(awk -v ip="$ip" '$3==ip {print $4; exit}' /tmp/dhcp.leases 2>/dev/null)
+    [ -n "$name" ] && [ "$name" != "*" ] && echo "$name" && return
+    echo "$ip"
+}
+
+# ---- counter reading --------------------------------------------------------
+
+read_bytes_for_ip() {
+    local chain="$1" ip="$2"
+    iptables -nvxL "$chain" 2>/dev/null \
+        | awk -v ip="$ip" '$8==ip || $9==ip {print $2; exit}'
+}
+
+zero_counters_for_ip() {
+    local ip="$1"
+    iptables -Z "$CHAIN_IN"  2>/dev/null
+    iptables -Z "$CHAIN_OUT" 2>/dev/null
+}
+
+# ---- JSON helpers -----------------------------------------------------------
+
+bytes_to_human() {
+    local b="$1"
+    if   [ "$b" -gt 1073741824 ]; then printf "%.2f GB" "$(echo "$b 1073741824" | awk '{printf "%.2f", $1/$2}')";
+    elif [ "$b" -gt 1048576 ];    then printf "%.2f MB" "$(echo "$b 1048576"    | awk '{printf "%.2f", $1/$2}')";
+    elif [ "$b" -gt 1024 ];       then printf "%.2f KB" "$(echo "$b 1024"       | awk '{printf "%.2f", $1/$2}')";
+    else printf "%d B" "$b"; fi
+}
+
+write_current_json() {
+    local tmpfile="$RUNTIME_DIR/current.json.tmp"
+    local ts
+    ts=$(date +%s)
+
+    printf '{"ts":%d,"devices":[' "$ts" > "$tmpfile"
+    local first=1
+    while IFS=' ' read -r ip mac; do
+        [ -z "$ip" ] || [ -z "$mac" ] && continue
+        local safemac
+        safemac=$(echo "$mac" | tr -d ':')
+        local statfile="$RUNTIME_DIR/stats_${safemac}.json"
+
+        local down up hostname
+        down=$(read_bytes_for_ip "$CHAIN_IN"  "$ip")
+        up=$(read_bytes_for_ip   "$CHAIN_OUT" "$ip")
+        down=${down:-0}; up=${up:-0}
+        hostname=$(get_hostname "$ip")
+
+        # Append sample to per-device rolling stats file (keep last 360 samples = 1hr @ 10s)
+        append_sample "$safemac" "$ts" "$down" "$up"
+
+        [ "$first" -eq 0 ] && printf ',' >> "$tmpfile"
+        printf '{"ip":"%s","mac":"%s","hostname":"%s","down_bytes":%s,"up_bytes":%s}' \
+            "$ip" "$mac" "$hostname" "$down" "$up" >> "$tmpfile"
+        first=0
+    done < "$RUNTIME_DIR/arp_snapshot"
+    printf ']}\n' >> "$tmpfile"
+
+    mv "$tmpfile" "$RUNTIME_DIR/current.json"
+}
+
+append_sample() {
+    local safemac="$1" ts="$2" down="$3" up="$4"
+    local statfile="$RUNTIME_DIR/stats_${safemac}.json"
+    local entry
+    entry=$(printf '{"ts":%d,"down":%s,"up":%s}' "$ts" "$down" "$up")
+
+    if [ ! -f "$statfile" ]; then
+        printf '{"samples":[%s]}\n' "$entry" > "$statfile"
+    else
+        # Append and trim to last 360 entries using awk
+        awk -v entry="$entry" '
+        BEGIN { max=360 }
+        {
+            sub(/\]\}$/, "")
+            sub(/^\{"samples":\[/, "")
+            n = split($0, arr, /\},\{/)
+            out = ""
+            start = (n >= max) ? n - max + 1 : 1
+            for (i=start; i<=n; i++) {
+                if (out != "") out = out ","
+                s = arr[i]
+                if (substr(s,1,1) != "{") s = "{" s
+                if (substr(s,length(s),1) != "}") s = s "}"
+                out = out s
+            }
+            if (out != "") out = out "," entry
+            else out = entry
+            print "{\"samples\":[" out "]}"
+        }' "$statfile" > "${statfile}.tmp" && mv "${statfile}.tmp" "$statfile"
+    fi
+}
+
+# ---- daily persistence ------------------------------------------------------
+
+persist_daily_totals() {
+    local today
+    today=$(date +%Y-%m-%d)
+    while IFS=' ' read -r ip mac; do
+        [ -z "$mac" ] && continue
+        local safemac
+        safemac=$(echo "$mac" | tr -d ':')
+        local down up
+        down=$(read_bytes_for_ip "$CHAIN_IN"  "$ip"); down=${down:-0}
+        up=$(read_bytes_for_ip   "$CHAIN_OUT" "$ip"); up=${up:-0}
+
+        local histfile="$PERSIST_DIR/history_${safemac}.json"
+        local entry
+        entry=$(printf '{"date":"%s","down":%s,"up":%s}' "$today" "$down" "$up")
+
+        if [ ! -f "$histfile" ]; then
+            printf '{"daily":[%s]}\n' "$entry" > "$histfile"
+        else
+            # Upsert today's entry (replace if exists, else append); keep last 90 days
+            awk -v today="$today" -v entry="$entry" '
+            {
+                sub(/\]\}$/, "")
+                sub(/^\{"daily":\[/, "")
+                n = split($0, arr, /\},\{/)
+                found = 0
+                out = ""
+                for (i=1; i<=n; i++) {
+                    s = arr[i]
+                    if (substr(s,1,1) != "{") s = "{" s
+                    if (substr(s,length(s),1) != "}") s = s "}"
+                    if (index(s, "\"date\":\"" today "\"")) { s = entry; found = 1 }
+                    if (out != "") out = out ","
+                    out = out s
+                }
+                if (!found) { if (out != "") out = out ","; out = out entry }
+                # Trim to last 90 entries
+                n2 = split(out, arr2, /\},\{/)
+                start = (n2 > 90) ? n2 - 89 : 1
+                out2 = ""
+                for (i=start; i<=n2; i++) {
+                    s = arr2[i]
+                    if (substr(s,1,1) != "{") s = "{" s
+                    if (substr(s,length(s),1) != "}") s = s "}"
+                    if (out2 != "") out2 = out2 ","
+                    out2 = out2 s
+                }
+                print "{\"daily\":[" out2 "]}"
+            }' "$histfile" > "${histfile}.tmp" && mv "${histfile}.tmp" "$histfile"
+        fi
+    done < "$RUNTIME_DIR/arp_snapshot"
+}
+
+# ---- main loop --------------------------------------------------------------
+
+trap 'log "stopping"; teardown_chains; exit 0' TERM INT
+
+log "starting"
+teardown_chains
+setup_chains
+
+DAILY_FLUSH_HOUR=-1
+
+while true; do
+    # Refresh ARP snapshot and ensure rules exist for every device
+    get_arp_devices > "$RUNTIME_DIR/arp_snapshot"
+    while IFS=' ' read -r ip mac; do
+        [ -n "$ip" ] && ensure_rules_for_ip "$ip"
+    done < "$RUNTIME_DIR/arp_snapshot"
+
+    write_current_json
+
+    # Zero per-interval counters so next read gives a delta
+    iptables -Z "$CHAIN_IN"  2>/dev/null
+    iptables -Z "$CHAIN_OUT" 2>/dev/null
+
+    # Persist daily totals once per hour (on the hour)
+    current_hour=$(date +%H | sed 's/^0//')
+    if [ "$current_hour" != "$DAILY_FLUSH_HOUR" ]; then
+        persist_daily_totals
+        DAILY_FLUSH_HOUR="$current_hour"
+    fi
+
+    sleep "$INTERVAL"
+done

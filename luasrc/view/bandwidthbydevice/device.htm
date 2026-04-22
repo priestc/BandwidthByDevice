@@ -1,0 +1,57 @@
+<%+header%>
+<link rel="stylesheet" href="/luci-static/resources/bandwidthbydevice/style.css">
+
+<h2><%:Device Detail%></h2>
+
+<div id="bbd-device-header">
+  <a href="<%=luci.dispatcher.build_url("admin","status","bandwidthbydevice","overview")%>">
+    &larr; <%:Back to overview%>
+  </a>
+  <h3 id="bbd-device-name">...</h3>
+  <p id="bbd-device-meta"></p>
+</div>
+
+<div class="bbd-chart-section">
+  <h4><%:Live Bandwidth (last 5 minutes)%></h4>
+  <canvas id="bbd-live-chart" height="120"></canvas>
+</div>
+
+<div class="bbd-chart-section">
+  <h4><%:Historical Usage%></h4>
+  <div id="bbd-history-tabs">
+    <button class="bbd-tab active" data-range="day"><%:24 Hours%></button>
+    <button class="bbd-tab" data-range="week"><%:7 Days%></button>
+    <button class="bbd-tab" data-range="month"><%:30 Days%></button>
+  </div>
+  <canvas id="bbd-history-chart" height="120"></canvas>
+</div>
+
+<div class="bbd-stat-grid" id="bbd-totals">
+  <div class="bbd-stat">
+    <span class="bbd-stat-label"><%:Total Downloaded%></span>
+    <span class="bbd-stat-value" id="bbd-total-down">-</span>
+  </div>
+  <div class="bbd-stat">
+    <span class="bbd-stat-label"><%:Total Uploaded%></span>
+    <span class="bbd-stat-value" id="bbd-total-up">-</span>
+  </div>
+  <div class="bbd-stat">
+    <span class="bbd-stat-label"><%:Peak Download%></span>
+    <span class="bbd-stat-value" id="bbd-peak-down">-</span>
+  </div>
+  <div class="bbd-stat">
+    <span class="bbd-stat-label"><%:Peak Upload%></span>
+    <span class="bbd-stat-value" id="bbd-peak-up">-</span>
+  </div>
+</div>
+
+<script src="/luci-static/resources/bandwidthbydevice/chart.min.js"></script>
+<script src="/luci-static/resources/bandwidthbydevice/app.js"></script>
+<script>
+  BBD.init({
+    mode: "device",
+    mac: (new URLSearchParams(window.location.search)).get("mac"),
+    apiBase: "<%=luci.dispatcher.build_url("admin","status","bandwidthbydevice","api")%>"
+  });
+</script>
+<%+footer%>

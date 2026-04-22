@@ -1,0 +1,9 @@
+{
+  "admin/status/bandwidthbydevice": {
+    "title": "Bandwidth by Device",
+    "order": 60,
+    "action": {
+      "type": "firstchild"
+    }
+  }
+}

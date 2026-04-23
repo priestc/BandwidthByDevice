@@ -12,6 +12,7 @@
 INTERVAL=10
 RUNTIME_DIR="/tmp/bandwidthbydevice"
 PERSIST_DIR="/etc/bandwidthbydevice"
+DEVICES_FILE="$PERSIST_DIR/known_devices"
 CHAIN_IN="BBD_IN"
 CHAIN_OUT="BBD_OUT"
 
@@ -61,6 +62,25 @@ get_hostname() {
     echo "$ip"
 }
 
+# ---- device registry --------------------------------------------------------
+
+update_known_devices() {
+    local tmpfile="$DEVICES_FILE.tmp"
+    [ -f "$DEVICES_FILE" ] && cp "$DEVICES_FILE" "$tmpfile" || touch "$tmpfile"
+
+    while IFS=' ' read -r ip mac; do
+        [ -z "$ip" ] || [ -z "$mac" ] && continue
+        local hostname
+        hostname=$(get_hostname "$ip")
+        # Remove stale entry for this MAC then append updated one
+        grep -v "^$mac " "$tmpfile" > "${tmpfile}.2" 2>/dev/null \
+            && mv "${tmpfile}.2" "$tmpfile"
+        printf '%s %s %s\n' "$mac" "$ip" "$hostname" >> "$tmpfile"
+    done < "$RUNTIME_DIR/arp_snapshot"
+
+    mv "$tmpfile" "$DEVICES_FILE"
+}
+
 # ---- counter reading --------------------------------------------------------
 
 read_bytes_for_ip() {
@@ -86,32 +106,37 @@ bytes_to_human() {
 }
 
 write_current_json() {
+    [ -f "$DEVICES_FILE" ] || return
     local tmpfile="$RUNTIME_DIR/current.json.tmp"
     local ts
     ts=$(date +%s)
 
     printf '{"ts":%d,"devices":[' "$ts" > "$tmpfile"
     local first=1
-    while IFS=' ' read -r ip mac; do
-        [ -z "$ip" ] || [ -z "$mac" ] && continue
+    while IFS=' ' read -r mac ip hostname; do
+        [ -z "$mac" ] && continue
         local safemac
         safemac=$(echo "$mac" | tr -d ':')
-        local statfile="$RUNTIME_DIR/stats_${safemac}.json"
 
-        local down up hostname
-        down=$(read_bytes_for_ip "$CHAIN_IN"  "$ip")
-        up=$(read_bytes_for_ip   "$CHAIN_OUT" "$ip")
-        down=${down:-0}; up=${up:-0}
-        hostname=$(get_hostname "$ip")
+        # Check if device is currently in the ARP table
+        local active_ip
+        active_ip=$(awk -v m="$mac" '$2==m {print $1; exit}' "$RUNTIME_DIR/arp_snapshot")
 
-        # Append sample to per-device rolling stats file (keep last 360 samples = 1hr @ 10s)
-        append_sample "$safemac" "$ts" "$down" "$up"
+        local down=0 up=0 active="false"
+        if [ -n "$active_ip" ]; then
+            ip="$active_ip"
+            hostname=$(get_hostname "$ip")
+            down=$(read_bytes_for_ip "$CHAIN_IN"  "$ip"); down=${down:-0}
+            up=$(read_bytes_for_ip   "$CHAIN_OUT" "$ip"); up=${up:-0}
+            active="true"
+            append_sample "$safemac" "$ts" "$down" "$up"
+        fi
 
         [ "$first" -eq 0 ] && printf ',' >> "$tmpfile"
-        printf '{"ip":"%s","mac":"%s","hostname":"%s","down_bytes":%s,"up_bytes":%s}' \
-            "$ip" "$mac" "$hostname" "$down" "$up" >> "$tmpfile"
+        printf '{"ip":"%s","mac":"%s","hostname":"%s","down_bytes":%s,"up_bytes":%s,"active":%s}' \
+            "$ip" "$mac" "$hostname" "$down" "$up" "$active" >> "$tmpfile"
         first=0
-    done < "$RUNTIME_DIR/arp_snapshot"
+    done < "$DEVICES_FILE"
     printf ']}\n' >> "$tmpfile"
 
     mv "$tmpfile" "$RUNTIME_DIR/current.json"
@@ -152,9 +177,10 @@ append_sample() {
 # ---- daily persistence ------------------------------------------------------
 
 persist_daily_totals() {
+    [ -f "$DEVICES_FILE" ] || return
     local today
     today=$(date +%Y-%m-%d)
-    while IFS=' ' read -r ip mac; do
+    while IFS=' ' read -r mac ip hostname; do
         [ -z "$mac" ] && continue
         local safemac
         safemac=$(echo "$mac" | tr -d ':')
@@ -200,7 +226,7 @@ persist_daily_totals() {
                 print "{\"daily\":[" out2 "]}"
             }' "$histfile" > "${histfile}.tmp" && mv "${histfile}.tmp" "$histfile"
         fi
-    done < "$RUNTIME_DIR/arp_snapshot"
+    done < "$DEVICES_FILE"
 }
 
 # ---- main loop --------------------------------------------------------------
@@ -214,11 +240,12 @@ setup_chains
 DAILY_FLUSH_HOUR=-1
 
 while true; do
-    # Refresh ARP snapshot and ensure rules exist for every device
+    # Refresh ARP snapshot, update known device registry, add iptables rules
     get_arp_devices > "$RUNTIME_DIR/arp_snapshot"
     while IFS=' ' read -r ip mac; do
         [ -n "$ip" ] && ensure_rules_for_ip "$ip"
     done < "$RUNTIME_DIR/arp_snapshot"
+    update_known_devices
 
     write_current_json
 

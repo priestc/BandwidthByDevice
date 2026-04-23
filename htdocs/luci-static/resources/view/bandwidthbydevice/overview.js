@@ -44,12 +44,12 @@ function renderDevices(container, devices) {
 
   devices.forEach(function(dev) {
     var barPct = Math.round(((dev.down_bytes + dev.up_bytes) / maxBw) * 100);
-    container.appendChild(E('div', { 'class': 'bbd-device-card' }, [
+    container.appendChild(E('div', { 'class': 'bbd-device-card' + (dev.active ? '' : ' bbd-inactive') }, [
       E('a', {
         'class': 'bbd-device-name',
         'href': L.url('admin/status/bandwidthbydevice/device') + '?mac=' + encodeURIComponent(dev.mac)
       }, dev.hostname || dev.ip),
-      E('span', { 'class': 'bbd-device-ip' }, dev.ip),
+      E('span', { 'class': 'bbd-device-ip' }, dev.ip + (dev.active ? '' : ' — offline')),
       E('span', { 'class': 'bbd-device-mac' }, dev.mac),
       E('div', { 'class': 'bbd-rate-row' }, [
         E('span', { 'class': 'bbd-down' }, '↓ ' + fmtRate(dev.down_bytes, 10)),

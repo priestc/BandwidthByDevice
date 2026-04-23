@@ -94,7 +94,7 @@ return view.extend({
         document.querySelectorAll('.bbd-tab').forEach(function(b) { b.classList.remove('active'); });
         btn.classList.add('active');
         self.__histRange = range;
-        callHistory(mac).then(function(data) { self.__updateHist(data.daily || []); });
+        callHistory(mac).then(function(daily) { self.__updateHist(daily || []); });
       });
       return btn;
     });
@@ -153,18 +153,18 @@ return view.extend({
         metaEl.textContent = dev.mac + '  ·  ' + dev.ip;
       });
 
-      callHistory(mac).then(function(data) {
-        self.__updateHist(data.daily || []);
+      callHistory(mac).then(function(daily) {
+        self.__updateHist(daily || []);
       });
     }, 0);
 
     poll.add(function() {
-      return callStats(mac).then(function(data) {
+      return callStats(mac).then(function(samples) {
         if (!self.__liveChart) return;
-        var samples = (data.samples || []).slice(-30);
-        self.__liveChart.data.labels             = samples.map(function(s) { return fmtTime(s.ts); });
-        self.__liveChart.data.datasets[0].data   = samples.map(function(s) { return s.down; });
-        self.__liveChart.data.datasets[1].data   = samples.map(function(s) { return s.up; });
+        var slice = (samples || []).slice(-30);
+        self.__liveChart.data.labels             = slice.map(function(s) { return fmtTime(s.ts); });
+        self.__liveChart.data.datasets[0].data   = slice.map(function(s) { return s.down; });
+        self.__liveChart.data.datasets[1].data   = slice.map(function(s) { return s.up; });
         self.__liveChart.update();
       });
     }, 10);

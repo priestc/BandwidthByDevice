@@ -41,7 +41,7 @@ cat > "$BUILDDIR/control/control" <<EOF
 Package: $PKG_NAME
 Version: $PKG_VERSION-$PKG_RELEASE
 Architecture: $PKG_ARCH
-Depends: luci-base, iptables, kmod-ipt-conntrack
+Depends: luci-base, luci-lua-runtime, iptables, kmod-ipt-conntrack
 Section: luci
 Priority: optional
 Description: Per-device bandwidth monitor for OpenWRT LuCI

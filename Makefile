@@ -11,7 +11,7 @@ define Package/luci-app-bandwidthbydevice
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
   TITLE:=BandwidthByDevice - Per-device bandwidth monitor
-  DEPENDS:=+luci-base +iptables +kmod-ipt-conntrack
+  DEPENDS:=+luci-base +luci-lua-runtime +iptables +kmod-ipt-conntrack
   PKGARCH:=all
 endef
 

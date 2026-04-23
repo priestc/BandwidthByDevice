@@ -23,11 +23,15 @@ The LuCI frontend polls three JSON API endpoints:
 
 ## Installation
 
-### From the OpenWRT package feed (once published)
+### Via LuCI (recommended)
+
+1. Download the latest `.ipk` from the [Releases](https://github.com/priestc/BandwidthByDevice/releases) page
+2. In LuCI go to **System → Software**, paste the URL into **Download and install package**, and click **OK**
+
+### Via opkg
 
 ```sh
-opkg update
-opkg install luci-app-bandwidthbydevice
+opkg install https://github.com/priestc/BandwidthByDevice/releases/latest/download/luci-app-bandwidthbydevice_<version>-1_all.ipk
 ```
 
 ### Manual / development install

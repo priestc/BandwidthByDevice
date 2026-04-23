@@ -1,0 +1,30 @@
+name: Build and release .ipk
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build .ipk
+        run: |
+          chmod +x build-ipk.sh
+          ./build-ipk.sh ${{ steps.version.outputs.version }}
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.ipk"
+          generate_release_notes: true

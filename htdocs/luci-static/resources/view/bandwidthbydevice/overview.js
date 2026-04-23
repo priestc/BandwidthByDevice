@@ -14,7 +14,7 @@ function injectCSS() {
   var link = document.createElement('link');
   link.id = 'bbd-styles';
   link.rel = 'stylesheet';
-  link.href = L.resourceCacheUrl('bandwidthbydevice/style.css');
+  link.href = L.resource('bandwidthbydevice/style.css');
   document.head.appendChild(link);
 }
 

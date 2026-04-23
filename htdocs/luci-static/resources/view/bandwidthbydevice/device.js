@@ -28,7 +28,7 @@ function injectCSS() {
   var link = document.createElement('link');
   link.id = 'bbd-styles';
   link.rel = 'stylesheet';
-  link.href = L.resourceCacheUrl('bandwidthbydevice/style.css');
+  link.href = L.resource('bandwidthbydevice/style.css');
   document.head.appendChild(link);
 }
 
@@ -36,7 +36,7 @@ function loadChartJS() {
   return new Promise(function(resolve) {
     if (window.Chart) { resolve(); return; }
     var s = document.createElement('script');
-    s.src = L.resourceCacheUrl('bandwidthbydevice/chart.min.js');
+    s.src = L.resource('bandwidthbydevice/chart.min.js');
     s.onload = resolve;
     document.head.appendChild(s);
   });

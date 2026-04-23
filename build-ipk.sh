@@ -73,9 +73,8 @@ printf '2.0\n' > "$BUILDDIR/debian-binary"
 (cd "$BUILDDIR/data"    && tar -czf ../data.tar.gz    .)
 (cd "$BUILDDIR/control" && tar -czf ../control.tar.gz .)
 
-ar r "$PKG_FILENAME" \
-    "$BUILDDIR/debian-binary" \
-    "$BUILDDIR/control.tar.gz" \
-    "$BUILDDIR/data.tar.gz" 2>/dev/null
+tar -czf "$PKG_FILENAME" \
+    -C "$BUILDDIR" \
+    ./debian-binary ./control.tar.gz ./data.tar.gz
 
 echo "Built: $PKG_FILENAME"

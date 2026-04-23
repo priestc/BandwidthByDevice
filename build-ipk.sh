@@ -70,8 +70,8 @@ chmod 755 "$BUILDDIR/control/postinst" "$BUILDDIR/control/prerm"
 
 printf '2.0\n' > "$BUILDDIR/debian-binary"
 
-(cd "$BUILDDIR/data"    && tar -czf ../data.tar.gz    .)
-(cd "$BUILDDIR/control" && tar -czf ../control.tar.gz .)
+(cd "$BUILDDIR/data"    && tar --owner=root --group=root -czf ../data.tar.gz    .)
+(cd "$BUILDDIR/control" && tar --owner=root --group=root -czf ../control.tar.gz .)
 
 tar -czf "$PKG_FILENAME" \
     -C "$BUILDDIR" \

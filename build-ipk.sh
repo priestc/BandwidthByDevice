@@ -47,6 +47,25 @@ Priority: optional
 Description: Per-device bandwidth monitor for OpenWRT LuCI
 EOF
 
+cat > "$BUILDDIR/control/postinst" <<'EOF'
+#!/bin/sh
+[ "${IPKG_NO_SCRIPT}" = "1" ] && exit 0
+[ -x /etc/init.d/bandwidthbydevice ] || exit 0
+/etc/init.d/bandwidthbydevice enable
+/etc/init.d/bandwidthbydevice start
+exit 0
+EOF
+
+cat > "$BUILDDIR/control/prerm" <<'EOF'
+#!/bin/sh
+[ -x /etc/init.d/bandwidthbydevice ] || exit 0
+/etc/init.d/bandwidthbydevice stop
+/etc/init.d/bandwidthbydevice disable
+exit 0
+EOF
+
+chmod 755 "$BUILDDIR/control/postinst" "$BUILDDIR/control/prerm"
+
 # ---- assemble ---------------------------------------------------------------
 
 printf '2.0\n' > "$BUILDDIR/debian-binary"

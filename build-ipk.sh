@@ -50,6 +50,7 @@ EOF
 cat > "$BUILDDIR/control/postinst" <<'EOF'
 #!/bin/sh
 [ "${IPKG_NO_SCRIPT}" = "1" ] && exit 0
+rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache/
 [ -x /etc/init.d/bandwidthbydevice ] || exit 0
 /etc/init.d/bandwidthbydevice enable
 /etc/init.d/bandwidthbydevice start

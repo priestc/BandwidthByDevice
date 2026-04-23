@@ -1,0 +1,30 @@
+#!/bin/sh
+
+case "$1" in
+  list)
+    printf '{"devices":{},"stats":{"mac":"String"},"history":{"mac":"String"}}\n'
+    ;;
+  call)
+    case "$2" in
+      devices)
+        cat /tmp/bandwidthbydevice/current.json 2>/dev/null || \
+          printf '{"ts":0,"devices":[]}\n'
+        ;;
+      stats)
+        safemac=$(echo "$3" | jsonfilter -e '@.mac' 2>/dev/null | tr -d ':')
+        [ -n "$safemac" ] && \
+          cat "/tmp/bandwidthbydevice/stats_${safemac}.json" 2>/dev/null || \
+          printf '{"samples":[]}\n'
+        ;;
+      history)
+        safemac=$(echo "$3" | jsonfilter -e '@.mac' 2>/dev/null | tr -d ':')
+        [ -n "$safemac" ] && \
+          cat "/etc/bandwidthbydevice/history_${safemac}.json" 2>/dev/null || \
+          printf '{"daily":[]}\n'
+        ;;
+      *)
+        printf '{"error":"unknown method"}\n'
+        ;;
+    esac
+    ;;
+esac

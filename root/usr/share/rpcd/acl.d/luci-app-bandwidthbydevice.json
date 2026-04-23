@@ -1,0 +1,10 @@
+{
+  "luci-app-bandwidthbydevice": {
+    "description": "Grant LuCI access to BandwidthByDevice status data",
+    "read": {
+      "ubus": {
+        "bandwidthbydevice": [ "devices", "stats", "history" ]
+      }
+    }
+  }
+}

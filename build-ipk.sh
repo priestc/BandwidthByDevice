@@ -13,24 +13,28 @@ trap 'rm -rf "$BUILDDIR"' EXIT
 # ---- data -------------------------------------------------------------------
 
 install -d \
-    "$BUILDDIR/data/usr/lib/lua/luci/controller" \
-    "$BUILDDIR/data/usr/lib/lua/luci/view/bandwidthbydevice" \
     "$BUILDDIR/data/usr/share/luci/menu.d" \
+    "$BUILDDIR/data/usr/libexec/rpcd" \
+    "$BUILDDIR/data/usr/share/rpcd/acl.d" \
     "$BUILDDIR/data/etc/init.d" \
     "$BUILDDIR/data/usr/bin" \
+    "$BUILDDIR/data/www/luci-static/resources/view/bandwidthbydevice" \
     "$BUILDDIR/data/www/luci-static/resources/bandwidthbydevice"
 
-cp luasrc/controller/bandwidthbydevice.lua \
-    "$BUILDDIR/data/usr/lib/lua/luci/controller/"
-cp luasrc/view/bandwidthbydevice/*.htm \
-    "$BUILDDIR/data/usr/lib/lua/luci/view/bandwidthbydevice/"
 cp luasrc/menu.d/luci-app-bandwidthbydevice.json \
     "$BUILDDIR/data/usr/share/luci/menu.d/"
+install -m 755 root/usr/libexec/rpcd/bandwidthbydevice \
+    "$BUILDDIR/data/usr/libexec/rpcd/bandwidthbydevice"
+cp root/usr/share/rpcd/acl.d/luci-app-bandwidthbydevice.json \
+    "$BUILDDIR/data/usr/share/rpcd/acl.d/"
 install -m 755 root/etc/init.d/bandwidthbydevice \
     "$BUILDDIR/data/etc/init.d/bandwidthbydevice"
 install -m 755 root/usr/bin/bbd-collector \
     "$BUILDDIR/data/usr/bin/bbd-collector"
-cp htdocs/luci-static/resources/bandwidthbydevice/* \
+cp htdocs/luci-static/resources/view/bandwidthbydevice/*.js \
+    "$BUILDDIR/data/www/luci-static/resources/view/bandwidthbydevice/"
+cp htdocs/luci-static/resources/bandwidthbydevice/chart.min.js \
+    htdocs/luci-static/resources/bandwidthbydevice/style.css \
     "$BUILDDIR/data/www/luci-static/resources/bandwidthbydevice/"
 
 # ---- control ----------------------------------------------------------------
@@ -41,7 +45,7 @@ cat > "$BUILDDIR/control/control" <<EOF
 Package: $PKG_NAME
 Version: $PKG_VERSION-$PKG_RELEASE
 Architecture: $PKG_ARCH
-Depends: luci-base, luci-lua-runtime, iptables, kmod-ipt-conntrack
+Depends: luci-base, iptables, kmod-ipt-conntrack
 Section: luci
 Priority: optional
 Description: Per-device bandwidth monitor for OpenWRT LuCI
@@ -51,6 +55,7 @@ cat > "$BUILDDIR/control/postinst" <<'EOF'
 #!/bin/sh
 [ "${IPKG_NO_SCRIPT}" = "1" ] && exit 0
 rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache/
+/etc/init.d/rpcd restart 2>/dev/null
 [ -x /etc/init.d/bandwidthbydevice ] || exit 0
 /etc/init.d/bandwidthbydevice enable
 /etc/init.d/bandwidthbydevice start

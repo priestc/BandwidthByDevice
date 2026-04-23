@@ -3,7 +3,7 @@
     "title": "Bandwidth by Device",
     "order": 60,
     "action": {
-      "type": "template",
+      "type": "view",
       "path": "bandwidthbydevice/overview"
     }
   },
@@ -11,7 +11,7 @@
     "title": "Device Detail",
     "order": 1,
     "action": {
-      "type": "template",
+      "type": "view",
       "path": "bandwidthbydevice/device"
     }
   }

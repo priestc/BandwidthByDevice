@@ -44,6 +44,21 @@ function classifyBandwidth(downBytes, upBytes, intervalSec) {
   return BW_TIERS[BW_TIERS.length - 1];
 }
 
+// Per-device rolling window: keep last 6 samples (60 s) and classify from peak.
+// Bursty traffic (phone sync, webpage load) would otherwise snap back to Idle
+// the instant the burst ends.
+var sampleHistory = {};
+var HISTORY_SIZE  = 6;
+
+function peakBytes(mac, downBytes, upBytes) {
+  if (!sampleHistory[mac]) sampleHistory[mac] = [];
+  sampleHistory[mac].push({ d: downBytes || 0, u: upBytes || 0 });
+  if (sampleHistory[mac].length > HISTORY_SIZE) sampleHistory[mac].shift();
+  return sampleHistory[mac].reduce(function(m, s) {
+    return { d: Math.max(m.d, s.d), u: Math.max(m.u, s.u) };
+  }, { d: 0, u: 0 });
+}
+
 var idleSince = {};
 
 function fmtIdleTime(ms) {
@@ -58,9 +73,11 @@ function fmtIdleTime(ms) {
 function makeBadge(dev) {
   if (!dev.active) {
     delete idleSince[dev.mac];
+    delete sampleHistory[dev.mac];
     return E('span', { 'class': 'bbd-bw-badge bbd-bw-offline' }, 'Offline');
   }
-  var tier = classifyBandwidth(dev.down_bytes, dev.up_bytes, 10);
+  var peak = peakBytes(dev.mac, dev.down_bytes, dev.up_bytes);
+  var tier = classifyBandwidth(peak.d, peak.u, 10);
   if (tier.key === 'idle') {
     if (!idleSince[dev.mac]) idleSince[dev.mac] = Date.now();
     var elapsed = fmtIdleTime(Date.now() - idleSince[dev.mac]);

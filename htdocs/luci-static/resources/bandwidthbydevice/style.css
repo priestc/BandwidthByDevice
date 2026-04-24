@@ -109,18 +109,15 @@
   margin-bottom: 2rem;
 }
 
-.bbd-form-table {
-  border-collapse: collapse;
-  margin-bottom: 1rem;
+.bbd-form-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.5rem;
 }
 
-.bbd-form-table td {
-  padding: 0.35rem 0.75rem 0.35rem 0;
-  vertical-align: middle;
-}
-
-.bbd-form-table td:first-child {
+.bbd-form-label {
   width: 130px;
+  flex-shrink: 0;
   color: #555;
   font-size: 0.9em;
 }

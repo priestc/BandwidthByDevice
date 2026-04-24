@@ -153,31 +153,66 @@ return view.extend({
       ]);
     });
 
-    return E('div', {}, [
-      E('h2', 'Bandwidth by Device — Backup & Restore'),
+    function row(labelText, inputEl) {
+      var d = document.createElement('div');
+      d.className = 'bbd-form-row';
+      var l = document.createElement('label');
+      l.className = 'bbd-form-label';
+      l.textContent = labelText;
+      d.appendChild(l);
+      d.appendChild(inputEl);
+      return d;
+    }
 
-      E('div', { 'class': 'bbd-section' }, [
-        E('h3', 'Server Settings'),
-        E('table', { 'class': 'bbd-form-table' }, [
-          E('tr', [ E('td', E('label', 'Protocol')),     E('td', proto)   ]),
-          E('tr', [ E('td', E('label', 'Host')),         E('td', host)    ]),
-          E('tr', [ E('td', E('label', 'Port')),         E('td', port)    ]),
-          E('tr', [ E('td', E('label', 'Username')),     E('td', user)    ]),
-          E('tr', [ E('td', E('label', 'Password')),     E('td', pass)    ]),
-          E('tr', [ E('td', E('label', 'Remote Path')),  E('td', rpath)   ])
-        ]),
-        E('p', { 'class': 'bbd-hint' }, 'Remote Path is the absolute path on the server where the backup file will be stored. The directory must exist. For SCP, sshpass must be installed on the router.'),
-        saveBtn
-      ]),
+    var formDiv = document.createElement('div');
+    formDiv.appendChild(row('Protocol',    proto));
+    formDiv.appendChild(row('Host',        host));
+    formDiv.appendChild(row('Port',        port));
+    formDiv.appendChild(row('Username',    user));
+    formDiv.appendChild(row('Password',    pass));
+    formDiv.appendChild(row('Remote Path', rpath));
 
-      E('div', { 'class': 'bbd-section' }, [
-        E('h3', 'Backup & Restore'),
-        E('p', 'Backup saves all historical bandwidth data to the remote server as a single archive. Restore retrieves that archive and replaces current data.'),
-        E('div', { 'class': 'bbd-action-row' }, [ backupBtn, restoreBtn ]),
-        E('div', { 'class': 'bbd-status-label' }, 'Last operation:'),
-        statusEl
-      ])
-    ]);
+    var hint = document.createElement('p');
+    hint.className = 'bbd-hint';
+    hint.textContent = 'Remote Path is the absolute path on the server where the backup file will be stored. The directory must exist. For SCP, sshpass must be installed on the router.';
+
+    var settingsSection = document.createElement('div');
+    settingsSection.className = 'bbd-section';
+    var h3a = document.createElement('h3');
+    h3a.textContent = 'Server Settings';
+    settingsSection.appendChild(h3a);
+    settingsSection.appendChild(formDiv);
+    settingsSection.appendChild(hint);
+    settingsSection.appendChild(saveBtn);
+
+    var actionRow = document.createElement('div');
+    actionRow.className = 'bbd-action-row';
+    actionRow.appendChild(backupBtn);
+    actionRow.appendChild(restoreBtn);
+
+    var statusLabel = document.createElement('div');
+    statusLabel.className = 'bbd-status-label';
+    statusLabel.textContent = 'Last operation:';
+
+    var backupSection = document.createElement('div');
+    backupSection.className = 'bbd-section';
+    var h3b = document.createElement('h3');
+    h3b.textContent = 'Backup & Restore';
+    var desc = document.createElement('p');
+    desc.textContent = 'Backup saves all historical bandwidth data to the remote server as a single archive. Restore retrieves that archive and replaces current data.';
+    backupSection.appendChild(h3b);
+    backupSection.appendChild(desc);
+    backupSection.appendChild(actionRow);
+    backupSection.appendChild(statusLabel);
+    backupSection.appendChild(statusEl);
+
+    var page = document.createElement('div');
+    var h2 = document.createElement('h2');
+    h2.textContent = 'Bandwidth by Device — Backup & Restore';
+    page.appendChild(h2);
+    page.appendChild(settingsSection);
+    page.appendChild(backupSection);
+    return page;
   },
 
   handleSaveApply: null,

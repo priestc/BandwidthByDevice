@@ -11,9 +11,9 @@ chmod +x deploy.sh   # first time only
 ./deploy.sh
 ```
 
-This uses `rsync` over SSH to push only changed files to the router and
-restart the affected services. The router must be reachable as `router`
-via `~/.ssh/config`. To target a different host:
+This pipes every file over SSH using `cat` — requires no extra binaries
+on the router (no rsync, no sftp-server). The router must be reachable
+as `router` via `~/.ssh/config`. To target a different host:
 
 ```sh
 ./deploy.sh myrouterhostname

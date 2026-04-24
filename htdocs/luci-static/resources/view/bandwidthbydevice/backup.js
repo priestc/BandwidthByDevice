@@ -54,14 +54,17 @@ function setStatus(el, status, message, ts) {
 
 return view.extend({
   load: function() {
-    return Promise.all([ callGetConfig(), callGetStatus() ]);
+    return Promise.all([
+      callGetConfig().catch(function() { return {}; }),
+      callGetStatus().catch(function() { return {}; })
+    ]);
   },
 
   render: function(data) {
     injectCSS();
 
-    var cfg    = data[0] || {};
-    var status = data[1] || {};
+    var cfg    = (data && data[0]) || {};
+    var status = (data && data[1]) || {};
 
     var proto   = E('select', { 'id': 'bbd-proto',    'class': 'bbd-input' }, [
       E('option', { value: 'sftp', selected: cfg.protocol !== 'scp' ? '' : null }, 'SFTP (via curl)'),
@@ -70,7 +73,7 @@ return view.extend({
     var host    = E('input', { 'id': 'bbd-host',     'class': 'bbd-input', type: 'text',     value: cfg.host         || '', placeholder: 'e.g. 192.168.1.100 or nas.local' });
     var port    = E('input', { 'id': 'bbd-port',     'class': 'bbd-input', type: 'number',   value: cfg.port         || '22', min: 1, max: 65535 });
     var user    = E('input', { 'id': 'bbd-user',     'class': 'bbd-input', type: 'text',     value: cfg.username     || '', placeholder: 'username' });
-    var pass    = E('input', { 'id': 'bbd-pass',     'class': 'bbd-input', type: 'password', value: '',               placeholder: cfg.username ? '(unchanged)' : '' });
+    var pass    = E('input', { 'id': 'bbd-pass',     'class': 'bbd-input', type: 'password', value: '',               placeholder: cfg.username ? '(unchanged)' : 'password' });
     var rpath   = E('input', { 'id': 'bbd-rpath',    'class': 'bbd-input', type: 'text',     value: cfg.remote_path  || '/backup/bandwidthbydevice', placeholder: '/backup/bandwidthbydevice' });
 
     var saveBtn    = E('button', { 'class': 'bbd-btn' },           'Save Settings');

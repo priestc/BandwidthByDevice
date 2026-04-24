@@ -44,9 +44,29 @@ function classifyBandwidth(downBytes, upBytes, intervalSec) {
   return BW_TIERS[BW_TIERS.length - 1];
 }
 
+var idleSince = {};
+
+function fmtIdleTime(ms) {
+  var s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60);
+  s = s % 60;
+  if (m < 60) return m + 'm ' + s + 's';
+  return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+}
+
 function makeBadge(dev) {
-  if (!dev.active) return E('span', { 'class': 'bbd-bw-badge bbd-bw-offline' }, 'Offline');
+  if (!dev.active) {
+    delete idleSince[dev.mac];
+    return E('span', { 'class': 'bbd-bw-badge bbd-bw-offline' }, 'Offline');
+  }
   var tier = classifyBandwidth(dev.down_bytes, dev.up_bytes, 10);
+  if (tier.key === 'idle') {
+    if (!idleSince[dev.mac]) idleSince[dev.mac] = Date.now();
+    var elapsed = fmtIdleTime(Date.now() - idleSince[dev.mac]);
+    return E('span', { 'class': 'bbd-bw-badge bbd-bw-idle' }, 'Idle ' + elapsed);
+  }
+  delete idleSince[dev.mac];
   return E('span', { 'class': 'bbd-bw-badge bbd-bw-' + tier.key }, tier.label);
 }
 

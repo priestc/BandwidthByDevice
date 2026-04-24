@@ -5,6 +5,9 @@ case "$1" in
     printf '{"devices":{},"stats":{"mac":"String"},"history":{"mac":"String"},"get_backup_config":{},"set_backup_config":{"protocol":"String","host":"String","port":"String","username":"String","password":"String","remote_path":"String"},"run_backup":{},"run_restore":{},"get_backup_status":{}}\n'
     ;;
   call)
+    # rpcd passes method params via stdin as JSON, not as $3
+    INPUT=$(cat)
+
     case "$2" in
 
       devices)
@@ -13,21 +16,20 @@ case "$1" in
         ;;
 
       stats)
-        safemac=$(echo "$3" | jsonfilter -e '@.mac' 2>/dev/null | tr -d ':')
+        safemac=$(echo "$INPUT" | jsonfilter -e '@.mac' 2>/dev/null | tr -d ':')
         [ -n "$safemac" ] && \
           cat "/tmp/bandwidthbydevice/stats_${safemac}.json" 2>/dev/null || \
           printf '{"samples":[]}\n'
         ;;
 
       history)
-        safemac=$(echo "$3" | jsonfilter -e '@.mac' 2>/dev/null | tr -d ':')
+        safemac=$(echo "$INPUT" | jsonfilter -e '@.mac' 2>/dev/null | tr -d ':')
         [ -n "$safemac" ] && \
           cat "/etc/bandwidthbydevice/history_${safemac}.json" 2>/dev/null || \
           printf '{"daily":[]}\n'
         ;;
 
       get_backup_config)
-        # Password is intentionally excluded from the response
         printf '{"protocol":"%s","host":"%s","port":"%s","username":"%s","remote_path":"%s"}\n' \
           "$(uci -q get bandwidthbydevice.backup.protocol  || echo sftp)" \
           "$(uci -q get bandwidthbydevice.backup.host      || echo '')" \
@@ -37,11 +39,10 @@ case "$1" in
         ;;
 
       set_backup_config)
-        # Ensure section exists
         uci -q get bandwidthbydevice.backup >/dev/null 2>&1 || \
           uci set bandwidthbydevice.backup=backup
         for key in protocol host port username password remote_path; do
-          val=$(echo "$3" | jsonfilter -e "@.${key}" 2>/dev/null)
+          val=$(echo "$INPUT" | jsonfilter -e "@.${key}" 2>/dev/null)
           [ -n "$val" ] && uci set "bandwidthbydevice.backup.${key}=${val}"
         done
         uci commit bandwidthbydevice
@@ -51,13 +52,13 @@ case "$1" in
       run_backup)
         /usr/bin/bbd-backup backup >/dev/null 2>&1
         cat /tmp/bandwidthbydevice/backup_status.json 2>/dev/null || \
-          printf '{"status":"error","message":"Script did not produce output","ts":0}\n'
+          printf '{"status":"error","message":"Script produced no output","ts":0}\n'
         ;;
 
       run_restore)
         /usr/bin/bbd-backup restore >/dev/null 2>&1
         cat /tmp/bandwidthbydevice/backup_status.json 2>/dev/null || \
-          printf '{"status":"error","message":"Script did not produce output","ts":0}\n'
+          printf '{"status":"error","message":"Script produced no output","ts":0}\n'
         ;;
 
       get_backup_status)

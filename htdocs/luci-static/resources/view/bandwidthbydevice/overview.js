@@ -18,6 +18,38 @@ function injectCSS() {
   document.head.appendChild(link);
 }
 
+// Thresholds are in Mbps (download). Order matters — first match wins.
+var BW_TIERS = [
+  { mbps: 50,   label: '8K Video',    key: '8k'        },
+  { mbps: 20,   label: '4K Video',    key: '4k'        },
+  { mbps: 8,    label: 'Full HD',     key: 'fhd'       },
+  { mbps: 4,    label: 'HD Video',    key: 'hd'        },
+  { mbps: 1.5,  label: 'SD Video',   key: 'sd'        },
+  { mbps: 0.25, label: 'Music',       key: 'audio'     },
+  { mbps: 0.04, label: 'Browsing',    key: 'web'       },
+  { mbps: 0,    label: 'Idle',        key: 'idle'      }
+];
+
+function classifyBandwidth(downBytes, upBytes, intervalSec) {
+  var downMbps = (downBytes / intervalSec) * 8 / 1e6;
+  var upMbps   = (upBytes   / intervalSec) * 8 / 1e6;
+
+  // Symmetric traffic where both sides are substantial → video call
+  if (downMbps >= 0.5 && upMbps >= 0.5 && upMbps / downMbps > 0.4)
+    return { label: 'Video Call', key: 'videocall' };
+
+  for (var i = 0; i < BW_TIERS.length; i++)
+    if (downMbps >= BW_TIERS[i].mbps) return BW_TIERS[i];
+
+  return BW_TIERS[BW_TIERS.length - 1];
+}
+
+function makeBadge(dev) {
+  if (!dev.active) return E('span', { 'class': 'bbd-bw-badge bbd-bw-offline' }, 'Offline');
+  var tier = classifyBandwidth(dev.down_bytes, dev.up_bytes, 10);
+  return E('span', { 'class': 'bbd-bw-badge bbd-bw-' + tier.key }, tier.label);
+}
+
 function fmtRate(bytesPerInterval, intervalSec) {
   var bps = (bytesPerInterval / intervalSec) * 8;
   if (bps >= 1e9) return (bps / 1e9).toFixed(2) + ' Gbps';
@@ -45,11 +77,14 @@ function renderDevices(container, devices) {
   devices.forEach(function(dev) {
     var barPct = Math.round(((dev.down_bytes + dev.up_bytes) / maxBw) * 100);
     container.appendChild(E('div', { 'class': 'bbd-device-card' + (dev.active ? '' : ' bbd-inactive') }, [
-      E('a', {
-        'class': 'bbd-device-name',
-        'href': L.url('admin/status/bandwidthbydevice/device') + '?mac=' + encodeURIComponent(dev.mac)
-      }, dev.hostname || dev.ip),
-      E('span', { 'class': 'bbd-device-ip' }, dev.ip + (dev.active ? '' : ' — offline')),
+      E('div', { 'class': 'bbd-card-header' }, [
+        E('a', {
+          'class': 'bbd-device-name',
+          'href': L.url('admin/status/bandwidthbydevice/device') + '?mac=' + encodeURIComponent(dev.mac)
+        }, dev.hostname || dev.ip),
+        makeBadge(dev)
+      ]),
+      E('span', { 'class': 'bbd-device-ip' }, dev.ip),
       E('span', { 'class': 'bbd-device-mac' }, dev.mac),
       E('div', { 'class': 'bbd-rate-row' }, [
         E('span', { 'class': 'bbd-down' }, '↓ ' + fmtRate(dev.down_bytes, 10)),

@@ -16,6 +16,7 @@ install -d \
     "$BUILDDIR/data/usr/share/luci/menu.d" \
     "$BUILDDIR/data/usr/libexec/rpcd" \
     "$BUILDDIR/data/usr/share/rpcd/acl.d" \
+    "$BUILDDIR/data/etc/config" \
     "$BUILDDIR/data/etc/init.d" \
     "$BUILDDIR/data/usr/bin" \
     "$BUILDDIR/data/www/luci-static/resources/view/bandwidthbydevice" \
@@ -23,6 +24,8 @@ install -d \
 
 cp luasrc/menu.d/luci-app-bandwidthbydevice.json \
     "$BUILDDIR/data/usr/share/luci/menu.d/"
+cp root/etc/config/bandwidthbydevice \
+    "$BUILDDIR/data/etc/config/bandwidthbydevice"
 install -m 755 root/usr/libexec/rpcd/bandwidthbydevice \
     "$BUILDDIR/data/usr/libexec/rpcd/bandwidthbydevice"
 cp root/usr/share/rpcd/acl.d/luci-app-bandwidthbydevice.json \
@@ -31,6 +34,8 @@ install -m 755 root/etc/init.d/bandwidthbydevice \
     "$BUILDDIR/data/etc/init.d/bandwidthbydevice"
 install -m 755 root/usr/bin/bbd-collector \
     "$BUILDDIR/data/usr/bin/bbd-collector"
+install -m 755 root/usr/bin/bbd-backup \
+    "$BUILDDIR/data/usr/bin/bbd-backup"
 cp htdocs/luci-static/resources/view/bandwidthbydevice/*.js \
     "$BUILDDIR/data/www/luci-static/resources/view/bandwidthbydevice/"
 cp htdocs/luci-static/resources/bandwidthbydevice/chart.min.js \

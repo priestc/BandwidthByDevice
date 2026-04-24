@@ -71,6 +71,84 @@
   opacity: 0.45;
 }
 
+/* backup page */
+
+.bbd-section {
+  margin-bottom: 2rem;
+}
+
+.bbd-form-table {
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+}
+
+.bbd-form-table td {
+  padding: 0.35rem 0.75rem 0.35rem 0;
+  vertical-align: middle;
+}
+
+.bbd-form-table td:first-child {
+  width: 130px;
+  color: #555;
+  font-size: 0.9em;
+}
+
+.bbd-input {
+  width: 280px;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 0.95em;
+}
+
+.bbd-btn {
+  padding: 0.4rem 1rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #f5f5f5;
+  cursor: pointer;
+  font-size: 0.9em;
+  margin-right: 0.5rem;
+}
+
+.bbd-btn-primary { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+.bbd-btn-danger  { background: #ef4444; color: #fff; border-color: #ef4444; }
+.bbd-btn:disabled { opacity: 0.6; cursor: default; }
+
+.bbd-action-row {
+  margin-bottom: 1rem;
+}
+
+.bbd-hint {
+  font-size: 0.8em;
+  color: #888;
+  margin-bottom: 0.75rem;
+}
+
+.bbd-status-label {
+  font-size: 0.85em;
+  color: #888;
+  margin-bottom: 0.3rem;
+}
+
+.bbd-backup-status {
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.9em;
+  border: 1px solid #ddd;
+  background: #f9f9f9;
+}
+
+.bbd-status-ok      { border-color: #86efac; background: #f0fdf4; }
+.bbd-status-error   { border-color: #fca5a5; background: #fef2f2; }
+.bbd-status-running { border-color: #93c5fd; background: #eff6ff; }
+.bbd-status-never   { color: #aaa; }
+
+.bbd-status-ts {
+  font-size: 0.85em;
+  color: #888;
+}
+
 /* device detail */
 #bbd-device-header {
   margin-bottom: 1.5rem;

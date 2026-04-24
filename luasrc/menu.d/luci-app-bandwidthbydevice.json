@@ -14,5 +14,13 @@
       "type": "view",
       "path": "bandwidthbydevice/device"
     }
+  },
+  "admin/status/bandwidthbydevice/backup": {
+    "title": "Backup & Restore",
+    "order": 2,
+    "action": {
+      "type": "view",
+      "path": "bandwidthbydevice/backup"
+    }
   }
 }

@@ -1,9 +1,19 @@
 {
   "luci-app-bandwidthbydevice": {
-    "description": "Grant LuCI access to BandwidthByDevice status data",
+    "description": "Grant LuCI access to BandwidthByDevice status and backup functions",
     "read": {
       "ubus": {
-        "bandwidthbydevice": [ "devices", "stats", "history" ]
+        "bandwidthbydevice": [
+          "devices", "stats", "history",
+          "get_backup_config", "get_backup_status"
+        ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "bandwidthbydevice": [
+          "set_backup_config", "run_backup", "run_restore"
+        ]
       }
     }
   }

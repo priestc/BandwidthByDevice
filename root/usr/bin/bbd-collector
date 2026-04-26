@@ -3,14 +3,17 @@
 # bbd-collector: Per-device bandwidth data collection daemon.
 #
 # Measurement strategy:
-#   Rules live in mangle PREROUTING rather than filter FORWARD. OpenWRT's
-#   software/hardware flow offloading bypasses filter FORWARD for established
-#   connections, but mangle PREROUTING fires for every packet regardless.
-#   After conntrack resolves DNAT, the real LAN destination IP is visible here.
+#   Download rules live in mangle FORWARD. The NAT reversal that rewrites
+#   dst from the WAN IP back to the device's LAN IP happens in nat PREROUTING
+#   (priority -100), which runs AFTER mangle PREROUTING (priority -150) but
+#   BEFORE mangle FORWARD. So the device's real destination IP is only visible
+#   starting at the FORWARD hook.
 #
-#   Download: -i $WAN_IFACE -d $device_ip  (WAN→device, post-DNAT resolve)
-#   Upload:   -s $device_ip                (device→anywhere; LAN IPs are
-#                                           unique so no interface filter needed)
+#   Upload rules live in mangle PREROUTING. Outgoing packets still carry
+#   src=device_ip at PREROUTING time (SNAT is applied at POSTROUTING).
+#
+#   Download: mangle FORWARD  -i $WAN_IFACE -d $device_ip  (after DNAT resolved)
+#   Upload:   mangle PREROUTING -s $device_ip               (before SNAT)
 #
 #   IPv6 traffic is tracked via identical ip6tables chains; both v4 and v6
 #   byte counts are summed per device each interval.
@@ -45,21 +48,23 @@ get_wan_iface6() {
 setup_chains() {
     iptables -t mangle -N "$CHAIN_IN"  2>/dev/null
     iptables -t mangle -N "$CHAIN_OUT" 2>/dev/null
-    iptables -t mangle -C PREROUTING -j "$CHAIN_IN"  2>/dev/null || \
-        iptables -t mangle -I PREROUTING 1 -j "$CHAIN_IN"
+    # CHAIN_IN in FORWARD: DNAT already resolved, dst = real device IP
+    iptables -t mangle -C FORWARD    -j "$CHAIN_IN"  2>/dev/null || \
+        iptables -t mangle -I FORWARD    1 -j "$CHAIN_IN"
+    # CHAIN_OUT in PREROUTING: src = device IP before SNAT
     iptables -t mangle -C PREROUTING -j "$CHAIN_OUT" 2>/dev/null || \
-        iptables -t mangle -I PREROUTING 2 -j "$CHAIN_OUT"
+        iptables -t mangle -I PREROUTING 1 -j "$CHAIN_OUT"
 }
 
 teardown_chains() {
-    # Mangle table (current)
-    iptables -t mangle -D PREROUTING -j "$CHAIN_IN"  2>/dev/null
+    iptables -t mangle -D FORWARD    -j "$CHAIN_IN"  2>/dev/null
     iptables -t mangle -D PREROUTING -j "$CHAIN_OUT" 2>/dev/null
     iptables -t mangle -F "$CHAIN_IN"  2>/dev/null
     iptables -t mangle -F "$CHAIN_OUT" 2>/dev/null
     iptables -t mangle -X "$CHAIN_IN"  2>/dev/null
     iptables -t mangle -X "$CHAIN_OUT" 2>/dev/null
-    # Filter table (legacy cleanup from older deployments)
+    # Legacy cleanup: older versions put CHAIN_IN in PREROUTING or filter FORWARD
+    iptables -t mangle -D PREROUTING -j "$CHAIN_IN"  2>/dev/null
     iptables -D FORWARD -j "$CHAIN_IN"  2>/dev/null
     iptables -D FORWARD -j "$CHAIN_OUT" 2>/dev/null
     iptables -F "$CHAIN_IN"  2>/dev/null
@@ -71,13 +76,13 @@ teardown_chains() {
 ensure_rules_for_ip() {
     local ip="$1"
     if [ -n "$WAN_IFACE" ]; then
-        iptables -t mangle -C "$CHAIN_IN" -i "$WAN_IFACE" -d "$ip" 2>/dev/null || \
+        iptables -t mangle -C "$CHAIN_IN" -i "$WAN_IFACE" -d "$ip" -j RETURN 2>/dev/null || \
             iptables -t mangle -A "$CHAIN_IN" -i "$WAN_IFACE" -d "$ip" -j RETURN
     else
-        iptables -t mangle -C "$CHAIN_IN" -d "$ip" 2>/dev/null || \
+        iptables -t mangle -C "$CHAIN_IN" -d "$ip" -j RETURN 2>/dev/null || \
             iptables -t mangle -A "$CHAIN_IN" -d "$ip" -j RETURN
     fi
-    iptables -t mangle -C "$CHAIN_OUT" -s "$ip" 2>/dev/null || \
+    iptables -t mangle -C "$CHAIN_OUT" -s "$ip" -j RETURN 2>/dev/null || \
         iptables -t mangle -A "$CHAIN_OUT" -s "$ip" -j RETURN
 }
 
@@ -103,14 +108,15 @@ teardown_chains6() {
 
 ensure_rules_for_ip6() {
     local ip6="$1"
+    # IPv6 has no NAT: dst is already the device's real IPv6 address at PREROUTING
     if [ -n "$WAN_IFACE6" ]; then
-        ip6tables -t mangle -C "$CHAIN_IN" -i "$WAN_IFACE6" -d "$ip6" 2>/dev/null || \
+        ip6tables -t mangle -C "$CHAIN_IN" -i "$WAN_IFACE6" -d "$ip6" -j RETURN 2>/dev/null || \
             ip6tables -t mangle -A "$CHAIN_IN" -i "$WAN_IFACE6" -d "$ip6" -j RETURN
     else
-        ip6tables -t mangle -C "$CHAIN_IN" -d "$ip6" 2>/dev/null || \
+        ip6tables -t mangle -C "$CHAIN_IN" -d "$ip6" -j RETURN 2>/dev/null || \
             ip6tables -t mangle -A "$CHAIN_IN" -d "$ip6" -j RETURN
     fi
-    ip6tables -t mangle -C "$CHAIN_OUT" -s "$ip6" 2>/dev/null || \
+    ip6tables -t mangle -C "$CHAIN_OUT" -s "$ip6" -j RETURN 2>/dev/null || \
         ip6tables -t mangle -A "$CHAIN_OUT" -s "$ip6" -j RETURN
 }
 

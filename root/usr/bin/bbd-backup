@@ -1,6 +1,6 @@
 #!/bin/sh
 # bbd-backup: remote persistence for bandwidth history.
-# Usage: bbd-backup hourly
+# Usage: bbd-backup hourly | flush
 
 PERSIST_DIR="/etc/bandwidthbydevice"
 RUNTIME_DIR="/tmp/bandwidthbydevice"
@@ -9,7 +9,9 @@ DEVICES_FILE="$PERSIST_DIR/known_devices"
 
 mkdir -p "$RUNTIME_DIR"
 
-cfg() { uci -q get "bandwidthbydevice.backup.$1"; }
+log()        { logger -t bbd-backup "$*"; }
+cfg()        { uci -q get "bandwidthbydevice.backup.$1"; }
+cfg_persist(){ uci -q get "bandwidthbydevice.persist.$1"; }
 
 write_status() {
     local status="$1" msg="$2"
@@ -17,6 +19,11 @@ write_status() {
     printf '{"status":"%s","message":"%s","ts":%d}\n' \
         "$status" "$msg" "$(date +%s)" > "$STATUS_FILE"
 }
+
+# ---- hourly summary to remote -----------------------------------------------
+# Reads per-device stats_*.json files and ships one record per active device
+# covering the last hour.  Appends to BandwidthByDevice_OpenWRT.jsonl on the
+# remote server (unchanged from previous behaviour).
 
 do_hourly() {
     local host port user pass path
@@ -36,12 +43,11 @@ do_hourly() {
     local ts
     ts=$(date +%s)
 
-    # Label the hour that just completed
     local period
     period=$(awk "BEGIN{print strftime(\"%Y-%m-%dT%H:00\", $ts - 3600)}")
 
     local tmpfile
-    tmpfile=$(mktemp /tmp/bbd-persist-XXXXXX)
+    tmpfile=$(mktemp /tmp/bbd-hourly-XXXXXX)
 
     while IFS=' ' read -r mac ip hostname; do
         [ -z "$mac" ] && continue
@@ -55,7 +61,6 @@ do_hourly() {
             up=$(  grep -o '"up":[0-9]*'   "$statfile" | awk -F: '{s+=$2}END{print s+0}')
         fi
 
-        # Skip devices with no activity this hour
         [ "${down:-0}" -eq 0 ] && [ "${up:-0}" -eq 0 ] && continue
 
         printf '{"ts":%d,"period":"%s","mac":"%s","hostname":"%s","bytes_in":%s,"bytes_out":%s}\n' \
@@ -66,7 +71,6 @@ do_hourly() {
     dest_file="${path:+${path}/}BandwidthByDevice_OpenWRT.jsonl"
     dir_dest=$(dirname "$dest_file")
 
-    # Ensure remote directory exists, then append new records to the history file
     sshpass -p "$pass" ssh \
         -p "$port" -o StrictHostKeyChecking=no \
         "${user}@${host}" "mkdir -p '${dir_dest}'" >/dev/null 2>&1
@@ -86,7 +90,183 @@ do_hourly() {
     fi
 }
 
+# ---- raw 10-second flush to remote ------------------------------------------
+# Called by bbd-collector when the in-RAM persist_buf.jsonl exceeds
+# buf_limit_kb.  Three things happen atomically:
+#   1. The buffer is moved to a work file and a fresh empty buffer created.
+#   2. The work file is appended to BandwidthByDevice_OpenWRT_raw.jsonl on the
+#      remote server (10-second granularity, one record per device per interval).
+#   3. A per-device persist_summary_<mac>.json is written to flash, with one
+#      entry per flush covering {start_ts, end_ts, total down, total up}.
+# If the remote send fails the work file is merged back into the buffer so no
+# data is lost.
+
+do_flush() {
+    local buf="$RUNTIME_DIR/persist_buf.jsonl"
+    [ -f "$buf" ] || return 0
+
+    # Only one flush at a time
+    local lock="$RUNTIME_DIR/flush.lock"
+    [ -f "$lock" ] && return 0
+    touch "$lock"
+    trap 'rm -f "$lock"' EXIT INT TERM
+
+    # Require remote credentials — silently skip if not yet configured
+    local host user pass port path
+    host=$(cfg host)
+    user=$(cfg username)
+    if [ -z "$host" ] || [ -z "$user" ]; then
+        rm -f "$lock"; return 0
+    fi
+    port=$(cfg port); port=${port:-22}
+    pass=$(cfg password)
+    path=$(cfg remote_path); path="${path%/}"
+
+    if ! which sshpass >/dev/null 2>&1; then
+        log "flush skipped: sshpass not installed"
+        rm -f "$lock"; return 1
+    fi
+
+    # Atomically claim the buffer so the collector can keep writing without
+    # blocking or losing data.
+    local work="$RUNTIME_DIR/persist_flush_$$.jsonl"
+    mv "$buf" "$work" 2>/dev/null || { rm -f "$lock"; return 1; }
+    : > "$buf"
+
+    local line_count
+    line_count=$(wc -l < "$work" 2>/dev/null)
+    if [ "${line_count:-0}" -eq 0 ]; then
+        rm -f "$work" "$lock"; return 0
+    fi
+
+    # Single awk pass: extract time range and per-device totals.
+    local sums="$RUNTIME_DIR/persist_sums_$$.txt"
+    awk '
+    {
+        # ts
+        split($0, a, "\"ts\":")
+        split(a[2], b, ",")
+        ts = b[1] + 0
+        if (NR == 1) start_ts = ts
+        end_ts = ts
+
+        # mac (always 17 chars: xx:xx:xx:xx:xx:xx)
+        i = index($0, "\"mac\":\"")
+        if (!i) next
+        mac = substr($0, i + 7, 17)
+
+        # hostname
+        i = index($0, "\"hostname\":\"")
+        if (i) {
+            rest = substr($0, i + 12)
+            hn = substr(rest, 1, index(rest, "\"") - 1)
+        } else { hn = mac }
+
+        # down
+        split($0, a, "\"down\":")
+        split(a[2], b, ",")
+        dn = b[1] + 0
+
+        # up
+        split($0, a, "\"up\":")
+        split(a[2], b, "}")
+        up = b[1] + 0
+
+        total_down[mac] += dn
+        total_up[mac]   += up
+        if (!(mac in hostnames)) hostnames[mac] = hn
+        seen[mac] = 1
+    }
+    END {
+        print start_ts " " end_ts
+        for (mac in seen) {
+            safemac = mac; gsub(/:/, "", safemac)
+            print mac "|" hostnames[mac] "|" total_down[mac] "|" total_up[mac] "|" safemac
+        }
+    }' "$work" > "$sums"
+
+    local start_ts end_ts
+    read -r start_ts end_ts < "$sums"
+
+    if [ "${start_ts:-0}" -eq 0 ]; then
+        rm -f "$work" "$sums" "$lock"; return 0
+    fi
+
+    # Send raw 10-second data to remote
+    local raw_dest dir_dest
+    raw_dest="${path:+${path}/}BandwidthByDevice_OpenWRT_raw.jsonl"
+    dir_dest=$(dirname "$raw_dest")
+
+    sshpass -p "$pass" ssh \
+        -p "$port" -o StrictHostKeyChecking=no \
+        "${user}@${host}" "mkdir -p '${dir_dest}'" >/dev/null 2>&1
+
+    local rc out
+    out=$(sshpass -p "$pass" ssh \
+        -p "$port" -o StrictHostKeyChecking=no \
+        "${user}@${host}" "cat >> '${raw_dest}'" < "$work" 2>&1)
+    rc=$?
+
+    if [ "$rc" -ne 0 ]; then
+        # Restore buffer so no data is lost
+        cat "$work" >> "$buf"
+        rm -f "$work" "$sums" "$lock"
+        log "flush failed: $out"
+        return 1
+    fi
+
+    # Write per-device persistence-interval summaries (tier-3, on-device flash).
+    # Each entry spans start_ts→end_ts (one entry per flush, length = however
+    # long it took to fill the buffer).
+    tail -n +2 "$sums" | while IFS='|' read -r mac hostname down up safemac; do
+        [ -z "$mac" ] && continue
+        local entry sf
+        entry=$(printf '{"start_ts":%d,"end_ts":%d,"down":%s,"up":%s}' \
+            "$start_ts" "$end_ts" "$down" "$up")
+        sf="$PERSIST_DIR/persist_summary_${safemac}.json"
+
+        if [ ! -f "$sf" ]; then
+            printf '{"summaries":[%s]}\n' "$entry" > "$sf"
+        else
+            awk -v e="$entry" '
+            {
+                sub(/\]\}$/, ""); sub(/^\{"summaries":\[/, "")
+                n = split($0, a, /\},\{/)
+                out = ""
+                for (i = 1; i <= n; i++) {
+                    s = a[i]
+                    if (substr(s,1,1) != "{") s = "{" s
+                    if (substr(s,length(s),1) != "}") s = s "}"
+                    if (out != "") out = out ","
+                    out = out s
+                }
+                if (out != "") out = out "," e; else out = e
+                n2 = split(out, a2, /\},\{/)
+                st = (n2 > 500) ? n2 - 499 : 1
+                out2 = ""
+                for (i = st; i <= n2; i++) {
+                    s = a2[i]
+                    if (substr(s,1,1) != "{") s = "{" s
+                    if (substr(s,length(s),1) != "}") s = s "}"
+                    if (out2 != "") out2 = out2 ","
+                    out2 = out2 s
+                }
+                print "{\"summaries\":[" out2 "]}"
+            }' "$sf" > "${sf}.tmp" && mv "${sf}.tmp" "$sf"
+        fi
+    done
+
+    local period_str
+    period_str=$(awk "BEGIN{print strftime(\"%Y-%m-%dT%H:%M\", $start_ts)}")
+    log "flush: sent ${line_count} samples from ${period_str} to ${user}@${host}:${raw_dest}"
+
+    rm -f "$work" "$sums" "$lock"
+}
+
+# ---- dispatch ----------------------------------------------------------------
+
 case "$1" in
   hourly) do_hourly ;;
-  *) echo "Usage: $0 hourly"; exit 1 ;;
+  flush)  do_flush  ;;
+  *) echo "Usage: $0 hourly|flush"; exit 1 ;;
 esac

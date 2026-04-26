@@ -5,3 +5,6 @@ config backup 'backup'
 	option username ''
 	option password ''
 	option remote_path ''
+
+config persist 'persist'
+	option buf_limit_kb '2048'

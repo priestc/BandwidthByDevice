@@ -25,6 +25,7 @@ DEVICES_FILE="$PERSIST_DIR/known_devices"
 CHAIN_IN="BBD_IN"
 CHAIN_OUT="BBD_OUT"
 NFT_PREV_DIR="$RUNTIME_DIR/nft_prev"
+PERSIST_BUF="$RUNTIME_DIR/persist_buf.jsonl"
 WAN_IFACE=""
 
 mkdir -p "$RUNTIME_DIR" "$PERSIST_DIR" "$NFT_PREV_DIR"
@@ -220,6 +221,11 @@ write_current_json() {
 
         if [ "$active" = "true" ]; then
             append_sample "$safemac" "$ts" "$down" "$up"
+            # Append non-zero intervals to the persistence buffer (tier-1 raw data).
+            if [ "$down" -gt 0 ] 2>/dev/null || [ "$up" -gt 0 ] 2>/dev/null; then
+                printf '{"ts":%d,"mac":"%s","hostname":"%s","down":%s,"up":%s}\n' \
+                    "$ts" "$mac" "$hostname" "$down" "$up" >> "$PERSIST_BUF"
+            fi
         fi
 
         # Track last-activity timestamp; update whenever there are non-zero bytes.
@@ -357,6 +363,19 @@ persist_daily_totals() {
     done < "$DEVICES_FILE"
 }
 
+# ---- persistence buffer flush trigger --------------------------------------
+
+check_persist_flush() {
+    [ -f "$PERSIST_BUF" ]              || return
+    [ -f "$RUNTIME_DIR/flush.lock" ]   && return  # already flushing
+    local limit_kb
+    limit_kb=$(uci -q get bandwidthbydevice.persist.buf_limit_kb 2>/dev/null)
+    limit_kb=${limit_kb:-2048}
+    local size_bytes
+    size_bytes=$(wc -c < "$PERSIST_BUF" 2>/dev/null)
+    [ $((${size_bytes:-0} / 1024)) -ge "$limit_kb" ] && /usr/bin/bbd-backup flush &
+}
+
 # ---- main loop --------------------------------------------------------------
 
 trap 'log "stopping"; teardown_nft; exit 0' TERM INT
@@ -411,6 +430,8 @@ while true; do
         persist_daily_totals
         DAILY_FLUSH_HOUR="$current_hour"
     fi
+
+    check_persist_flush
 
     sleep "$INTERVAL"
 done

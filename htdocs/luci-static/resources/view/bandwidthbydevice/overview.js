@@ -122,7 +122,7 @@ function renderDevices(container, devices) {
   }
 
   devices.sort(function(a, b) {
-    return (b.down_bytes + b.up_bytes) - (a.down_bytes + a.up_bytes);
+    return (b.hourly_down + b.hourly_up) - (a.hourly_down + a.hourly_up);
   });
 
   var maxBw = Math.max.apply(null, devices.map(function(d) {

@@ -228,6 +228,14 @@ write_current_json() {
             fi
         fi
 
+        # Hourly totals from the rolling stats buffer (used for device ordering).
+        local hourly_down=0 hourly_up=0
+        local statfile="$RUNTIME_DIR/stats_${safemac}.json"
+        if [ -f "$statfile" ]; then
+            hourly_down=$(grep -o '"down":[0-9]*' "$statfile" | awk -F: '{s+=$2}END{print s+0}')
+            hourly_up=$(  grep -o '"up":[0-9]*'   "$statfile" | awk -F: '{s+=$2}END{print s+0}')
+        fi
+
         # Track last-activity timestamp; update whenever there are non-zero bytes.
         local idle_secs=0
         local last_active_file="$RUNTIME_DIR/last_active_${safemac}"
@@ -242,8 +250,8 @@ write_current_json() {
         fi
 
         [ "$first" -eq 0 ] && printf ',' >> "$tmpfile"
-        printf '{"ip":"%s","mac":"%s","hostname":"%s","down_bytes":%s,"up_bytes":%s,"active":%s,"idle_secs":%d}' \
-            "$ip" "$mac" "$hostname" "$down" "$up" "$active" "$idle_secs" >> "$tmpfile"
+        printf '{"ip":"%s","mac":"%s","hostname":"%s","down_bytes":%s,"up_bytes":%s,"hourly_down":%s,"hourly_up":%s,"active":%s,"idle_secs":%d}' \
+            "$ip" "$mac" "$hostname" "$down" "$up" "$hourly_down" "$hourly_up" "$active" "$idle_secs" >> "$tmpfile"
         first=0
     done < "$DEVICES_FILE"
     printf ']}\n' >> "$tmpfile"

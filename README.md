@@ -4,7 +4,7 @@ An OpenWRT LuCI plugin for intuitive per-device bandwidth monitoring.
 
 ## Features
 
-- **Live per-device bandwidth** — auto-discovers every device on the network via the ARP table and shows real-time up/down rates
+- **Live per-device bandwidth** — auto-discovers every device on the network via ARP (IPv4) and NDP (IPv6) and shows real-time up/down rates
 - **Live graphs** — rolling 5-minute sparkline for each device, updated every 10 seconds
 - **Historical stats** — daily totals stored persistently; view 24h / 7-day / 30-day bar charts per device
 - **Summary stats** — total downloaded, total uploaded, peak download, and peak upload per device
@@ -12,7 +12,7 @@ An OpenWRT LuCI plugin for intuitive per-device bandwidth monitoring.
 
 ## How it works
 
-A background daemon (`bbd-collector`) installs `iptables` accounting rules for each device IP it discovers. Every 10 seconds it reads the byte counters, writes JSON to `/tmp/bandwidthbydevice/`, then zeroes the counters so each sample represents a true interval delta. Once per hour the daemon also flushes daily totals to `/etc/bandwidthbydevice/` for persistence across reboots.
+A background daemon (`bbd-collector`) installs `iptables` **and `ip6tables`** accounting rules for each device IP it discovers. IPv4 addresses are found via the ARP table; IPv6 global-unicast addresses are found via the NDP neighbor cache (`ip -6 neigh`). Both v4 and v6 byte counts are summed per device so traffic that travels over IPv6 (common with Apple devices and modern services) is fully captured. Every 10 seconds the daemon reads the byte counters, writes JSON to `/tmp/bandwidthbydevice/`, then zeroes the counters so each sample represents a true interval delta. Once per hour it also flushes daily totals to `/etc/bandwidthbydevice/` for persistence across reboots.
 
 The LuCI frontend polls three JSON API endpoints:
 

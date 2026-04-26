@@ -12,7 +12,7 @@ An OpenWRT LuCI plugin for intuitive per-device bandwidth monitoring.
 
 ## How it works
 
-A background daemon (`bbd-collector`) installs `iptables` **and `ip6tables`** accounting rules for each device IP it discovers. IPv4 addresses are found via the ARP table; IPv6 global-unicast addresses are found via the NDP neighbor cache (`ip -6 neigh`). Both v4 and v6 byte counts are summed per device so traffic that travels over IPv6 (common with Apple devices and modern services) is fully captured. Every 10 seconds the daemon reads the byte counters, writes JSON to `/tmp/bandwidthbydevice/`, then zeroes the counters so each sample represents a true interval delta. Once per hour it also flushes daily totals to `/etc/bandwidthbydevice/` for persistence across reboots.
+A background daemon (`bbd-collector`) installs `nftables` accounting rules for each device IP it discovers, using the `inet` family so IPv4 and IPv6 are both tracked in a single rule set without requiring `ip6tables` (not installed on many OpenWRT builds). IPv4 addresses are found via the ARP table; IPv6 global-unicast addresses are found via the NDP neighbor cache (`ip -6 neigh`). Both v4 and v6 byte counts are summed per device so traffic that travels over IPv6 (common with Apple devices and modern services) is fully captured. Every 10 seconds the daemon reads the cumulative byte counters, computes per-interval deltas, and writes JSON to `/tmp/bandwidthbydevice/`. Once per hour it also flushes daily totals to `/etc/bandwidthbydevice/` for persistence across reboots.
 
 The LuCI frontend polls three JSON API endpoints:
 
@@ -94,8 +94,7 @@ Devices with zero activity during an hour are omitted. Each `.jsonl` file can be
 
 ## Dependencies
 
-- `iptables` (standard on OpenWRT)
-- `kmod-ipt-conntrack`
+- `nftables` / `nft` (standard on OpenWRT 21.02+)
 - `luci-base`
 - Chart.js (bundled — included in repo)
 

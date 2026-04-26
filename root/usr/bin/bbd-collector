@@ -2,21 +2,21 @@
 #
 # bbd-collector: Per-device bandwidth data collection daemon.
 #
-# Measurement strategy:
-#   Download rules live in mangle FORWARD. The NAT reversal that rewrites
-#   dst from the WAN IP back to the device's LAN IP happens in nat PREROUTING
-#   (priority -100), which runs AFTER mangle PREROUTING (priority -150) but
-#   BEFORE mangle FORWARD. So the device's real destination IP is only visible
-#   starting at the FORWARD hook.
+# Uses nftables (nft) in the inet family so IPv4 and IPv6 are both tracked
+# without requiring ip6tables (which is not installed on many OpenWRT builds).
 #
-#   Upload rules live in mangle PREROUTING. Outgoing packets still carry
-#   src=device_ip at PREROUTING time (SNAT is applied at POSTROUTING).
+# Download: BBD_IN chain, FORWARD hook priority 1.  FORWARD runs after
+#           nat PREROUTING (where DNAT resolves the real LAN IP), and
+#           priority 1 puts us just after fw4's filter chain (priority 0)
+#           so we only count traffic that fw4 actually forwarded.
 #
-#   Download: mangle FORWARD  -i $WAN_IFACE -d $device_ip  (after DNAT resolved)
-#   Upload:   mangle PREROUTING -s $device_ip               (before SNAT)
+# Upload:   BBD_OUT chain, PREROUTING hook priority -150 (mangle priority).
+#           The device's source IP is still its LAN address at PREROUTING
+#           — MASQUERADE/SNAT is applied later at POSTROUTING.
 #
-#   IPv6 traffic is tracked via identical ip6tables chains; both v4 and v6
-#   byte counts are summed per device each interval.
+# Byte counters in nft are cumulative; we compute per-interval deltas by
+# storing the last-read value per address in /tmp so no counter reset is
+# needed and no data is lost on slow reads.
 
 INTERVAL=10
 RUNTIME_DIR="/tmp/bandwidthbydevice"
@@ -24,10 +24,10 @@ PERSIST_DIR="/etc/bandwidthbydevice"
 DEVICES_FILE="$PERSIST_DIR/known_devices"
 CHAIN_IN="BBD_IN"
 CHAIN_OUT="BBD_OUT"
+NFT_PREV_DIR="$RUNTIME_DIR/nft_prev"
 WAN_IFACE=""
-WAN_IFACE6=""
 
-mkdir -p "$RUNTIME_DIR" "$PERSIST_DIR"
+mkdir -p "$RUNTIME_DIR" "$PERSIST_DIR" "$NFT_PREV_DIR"
 
 log() { logger -t bbd-collector "$*"; }
 
@@ -38,86 +38,51 @@ get_wan_iface() {
         | awk 'NR==1 { for(i=1;i<=NF;i++) if($i=="dev") { print $(i+1); exit } }'
 }
 
-get_wan_iface6() {
-    ip -6 route show default 2>/dev/null \
-        | awk 'NR==1 { for(i=1;i<=NF;i++) if($i=="dev") { print $(i+1); exit } }'
+# ---- nftables helpers -------------------------------------------------------
+
+setup_nft() {
+    nft add table inet bbd 2>/dev/null
+    nft "add chain inet bbd $CHAIN_IN { type filter hook forward priority 1; }" 2>/dev/null
+    nft "add chain inet bbd $CHAIN_OUT { type filter hook prerouting priority -150; }" 2>/dev/null
 }
 
-# ---- iptables helpers -------------------------------------------------------
-
-setup_chains() {
-    iptables -t mangle -N "$CHAIN_IN"  2>/dev/null
-    iptables -t mangle -N "$CHAIN_OUT" 2>/dev/null
-    # CHAIN_IN in FORWARD: DNAT already resolved, dst = real device IP
-    iptables -t mangle -C FORWARD    -j "$CHAIN_IN"  2>/dev/null || \
-        iptables -t mangle -I FORWARD    1 -j "$CHAIN_IN"
-    # CHAIN_OUT in PREROUTING: src = device IP before SNAT
-    iptables -t mangle -C PREROUTING -j "$CHAIN_OUT" 2>/dev/null || \
-        iptables -t mangle -I PREROUTING 1 -j "$CHAIN_OUT"
+teardown_nft() {
+    nft flush table inet bbd 2>/dev/null
+    nft delete table inet bbd 2>/dev/null
 }
 
-teardown_chains() {
-    iptables -t mangle -D FORWARD    -j "$CHAIN_IN"  2>/dev/null
-    iptables -t mangle -D PREROUTING -j "$CHAIN_OUT" 2>/dev/null
-    iptables -t mangle -F "$CHAIN_IN"  2>/dev/null
-    iptables -t mangle -F "$CHAIN_OUT" 2>/dev/null
-    iptables -t mangle -X "$CHAIN_IN"  2>/dev/null
-    iptables -t mangle -X "$CHAIN_OUT" 2>/dev/null
-    # Legacy cleanup: older versions put CHAIN_IN in PREROUTING or filter FORWARD
-    iptables -t mangle -D PREROUTING -j "$CHAIN_IN"  2>/dev/null
-    iptables -D FORWARD -j "$CHAIN_IN"  2>/dev/null
-    iptables -D FORWARD -j "$CHAIN_OUT" 2>/dev/null
-    iptables -F "$CHAIN_IN"  2>/dev/null
-    iptables -F "$CHAIN_OUT" 2>/dev/null
-    iptables -X "$CHAIN_IN"  2>/dev/null
-    iptables -X "$CHAIN_OUT" 2>/dev/null
-}
-
-ensure_rules_for_ip() {
+# Add a download (BBD_IN) rule for an IPv4 address if one doesn't exist yet.
+# Checks against the cached chain output written at the top of each loop.
+ensure_nft_ip4_in() {
     local ip="$1"
+    grep -qF "ip daddr $ip counter" "$RUNTIME_DIR/nft_in_cache" 2>/dev/null && return
     if [ -n "$WAN_IFACE" ]; then
-        iptables -t mangle -C "$CHAIN_IN" -i "$WAN_IFACE" -d "$ip" -j RETURN 2>/dev/null || \
-            iptables -t mangle -A "$CHAIN_IN" -i "$WAN_IFACE" -d "$ip" -j RETURN
+        nft add rule inet bbd "$CHAIN_IN" iifname "$WAN_IFACE" ip daddr "$ip" counter 2>/dev/null
     else
-        iptables -t mangle -C "$CHAIN_IN" -d "$ip" -j RETURN 2>/dev/null || \
-            iptables -t mangle -A "$CHAIN_IN" -d "$ip" -j RETURN
+        nft add rule inet bbd "$CHAIN_IN" ip daddr "$ip" counter 2>/dev/null
     fi
-    iptables -t mangle -C "$CHAIN_OUT" -s "$ip" -j RETURN 2>/dev/null || \
-        iptables -t mangle -A "$CHAIN_OUT" -s "$ip" -j RETURN
 }
 
-# ---- ip6tables helpers ------------------------------------------------------
-
-setup_chains6() {
-    ip6tables -t mangle -N "$CHAIN_IN"  2>/dev/null
-    ip6tables -t mangle -N "$CHAIN_OUT" 2>/dev/null
-    ip6tables -t mangle -C PREROUTING -j "$CHAIN_IN"  2>/dev/null || \
-        ip6tables -t mangle -I PREROUTING 1 -j "$CHAIN_IN"
-    ip6tables -t mangle -C PREROUTING -j "$CHAIN_OUT" 2>/dev/null || \
-        ip6tables -t mangle -I PREROUTING 2 -j "$CHAIN_OUT"
+ensure_nft_ip4_out() {
+    local ip="$1"
+    grep -qF "ip saddr $ip counter" "$RUNTIME_DIR/nft_out_cache" 2>/dev/null && return
+    nft add rule inet bbd "$CHAIN_OUT" ip saddr "$ip" counter 2>/dev/null
 }
 
-teardown_chains6() {
-    ip6tables -t mangle -D PREROUTING -j "$CHAIN_IN"  2>/dev/null
-    ip6tables -t mangle -D PREROUTING -j "$CHAIN_OUT" 2>/dev/null
-    ip6tables -t mangle -F "$CHAIN_IN"  2>/dev/null
-    ip6tables -t mangle -F "$CHAIN_OUT" 2>/dev/null
-    ip6tables -t mangle -X "$CHAIN_IN"  2>/dev/null
-    ip6tables -t mangle -X "$CHAIN_OUT" 2>/dev/null
-}
-
-ensure_rules_for_ip6() {
+ensure_nft_ip6_in() {
     local ip6="$1"
-    # IPv6 has no NAT: dst is already the device's real IPv6 address at PREROUTING
-    if [ -n "$WAN_IFACE6" ]; then
-        ip6tables -t mangle -C "$CHAIN_IN" -i "$WAN_IFACE6" -d "$ip6" -j RETURN 2>/dev/null || \
-            ip6tables -t mangle -A "$CHAIN_IN" -i "$WAN_IFACE6" -d "$ip6" -j RETURN
+    grep -qF "ip6 daddr $ip6 counter" "$RUNTIME_DIR/nft_in_cache" 2>/dev/null && return
+    if [ -n "$WAN_IFACE" ]; then
+        nft add rule inet bbd "$CHAIN_IN" iifname "$WAN_IFACE" ip6 daddr "$ip6" counter 2>/dev/null
     else
-        ip6tables -t mangle -C "$CHAIN_IN" -d "$ip6" -j RETURN 2>/dev/null || \
-            ip6tables -t mangle -A "$CHAIN_IN" -d "$ip6" -j RETURN
+        nft add rule inet bbd "$CHAIN_IN" ip6 daddr "$ip6" counter 2>/dev/null
     fi
-    ip6tables -t mangle -C "$CHAIN_OUT" -s "$ip6" -j RETURN 2>/dev/null || \
-        ip6tables -t mangle -A "$CHAIN_OUT" -s "$ip6" -j RETURN
+}
+
+ensure_nft_ip6_out() {
+    local ip6="$1"
+    grep -qF "ip6 saddr $ip6 counter" "$RUNTIME_DIR/nft_out_cache" 2>/dev/null && return
+    nft add rule inet bbd "$CHAIN_OUT" ip6 saddr "$ip6" counter 2>/dev/null
 }
 
 # ---- device discovery -------------------------------------------------------
@@ -165,18 +130,42 @@ update_known_devices() {
     mv "$tmpfile" "$DEVICES_FILE"
 }
 
-# ---- counter reading --------------------------------------------------------
+# ---- delta-based byte reading -----------------------------------------------
 
-read_bytes_for_ip() {
-    local chain="$1" ip="$2"
-    iptables -t mangle -nvxL "$chain" 2>/dev/null \
-        | awk -v ip="$ip" '$8==ip || $9==ip {print $2; exit}'
-}
+# Sanitize an IP address for use as a filename component.
+safe_addr() { printf '%s' "$1" | tr '.:' '__'; }
 
-read_bytes_for_ip6() {
-    local chain="$1" ip6="$2"
-    ip6tables -t mangle -nvxL "$chain" 2>/dev/null \
-        | awk -v ip="$ip6" '$8==ip || $9==ip {print $2; exit}'
+# Read the cumulative byte counter for $addr from a cached nft chain file,
+# compute the delta since the last call, persist the new baseline, and
+# print the delta.  Handles counter resets (e.g. after service restart)
+# by treating a decrease as "start fresh from current value".
+get_bytes_delta() {
+    local cache_file="$1" addr="$2" dir="$3"
+    local safaddr prev_file current prev delta
+
+    safaddr=$(safe_addr "$addr")
+    prev_file="$NFT_PREV_DIR/${dir}_${safaddr}"
+
+    current=$(awk -v a="$addr" '
+        index($0, " " a " counter") {
+            for (i=1; i<=NF; i++) if ($i=="bytes") { print $(i+1); exit }
+        }' "$cache_file" 2>/dev/null)
+    current=${current:-0}
+
+    if [ -f "$prev_file" ]; then
+        read -r prev < "$prev_file"
+        prev=${prev:-0}
+        if [ "$current" -ge "$prev" ] 2>/dev/null; then
+            delta=$(awk "BEGIN{print $current - $prev}")
+        else
+            delta="$current"
+        fi
+    else
+        delta="$current"
+    fi
+
+    printf '%s\n' "$current" > "$prev_file"
+    printf '%s\n' "$delta"
 }
 
 # ---- JSON helpers -----------------------------------------------------------
@@ -211,8 +200,8 @@ write_current_json() {
         if [ -n "$active_ip" ]; then
             ip="$active_ip"
             hostname=$(get_hostname "$ip")
-            down=$(read_bytes_for_ip "$CHAIN_IN"  "$ip"); down=${down:-0}
-            up=$(read_bytes_for_ip   "$CHAIN_OUT" "$ip"); up=${up:-0}
+            down=$(get_bytes_delta "$RUNTIME_DIR/nft_in_cache"  "$ip" "in");  down=${down:-0}
+            up=$(get_bytes_delta   "$RUNTIME_DIR/nft_out_cache" "$ip" "out"); up=${up:-0}
             active="true"
         fi
 
@@ -222,8 +211,8 @@ write_current_json() {
                 [ "$mac6" = "$mac" ] || continue
                 active="true"
                 local d6 u6
-                d6=$(read_bytes_for_ip6 "$CHAIN_IN"  "$ip6"); d6=${d6:-0}
-                u6=$(read_bytes_for_ip6 "$CHAIN_OUT" "$ip6"); u6=${u6:-0}
+                d6=$(get_bytes_delta "$RUNTIME_DIR/nft_in_cache"  "$ip6" "in");  d6=${d6:-0}
+                u6=$(get_bytes_delta "$RUNTIME_DIR/nft_out_cache" "$ip6" "out"); u6=${u6:-0}
                 down=$(awk "BEGIN{print $down + $d6}")
                 up=$(awk "BEGIN{print $up + $u6}")
             done < "$RUNTIME_DIR/ndp_snapshot"
@@ -357,57 +346,51 @@ persist_daily_totals() {
 
 # ---- main loop --------------------------------------------------------------
 
-trap 'log "stopping"; teardown_chains; teardown_chains6; exit 0' TERM INT
+trap 'log "stopping"; teardown_nft; exit 0' TERM INT
 
 WAN_IFACE=$(get_wan_iface)
-WAN_IFACE6=$(get_wan_iface6)
-log "starting (WAN: ${WAN_IFACE:-unknown}, WAN6: ${WAN_IFACE6:-none})"
-teardown_chains
-teardown_chains6
-setup_chains
-setup_chains6
+log "starting (WAN: ${WAN_IFACE:-unknown})"
+teardown_nft
+setup_nft
+
+# Seed empty cache files so ensure functions work on first iteration
+: > "$RUNTIME_DIR/nft_in_cache"
+: > "$RUNTIME_DIR/nft_out_cache"
 
 DAILY_FLUSH_HOUR=-1
 
 while true; do
-    # Rebuild IPv4 chains if WAN interface changed (e.g. PPPoE reconnect)
+    # Rebuild download rules if WAN interface changed (e.g. PPPoE reconnect)
     new_wan=$(get_wan_iface)
     if [ "$new_wan" != "$WAN_IFACE" ]; then
-        log "WAN interface changed: '${WAN_IFACE}' -> '${new_wan:-unknown}', rebuilding chains"
-        teardown_chains
+        log "WAN changed: '${WAN_IFACE}' -> '${new_wan:-unknown}', flushing BBD_IN"
+        nft flush chain inet bbd "$CHAIN_IN" 2>/dev/null
+        : > "$RUNTIME_DIR/nft_in_cache"
         WAN_IFACE="$new_wan"
-        setup_chains
     fi
 
-    # Rebuild IPv6 chains if WAN6 interface changed
-    new_wan6=$(get_wan_iface6)
-    if [ "$new_wan6" != "$WAN_IFACE6" ]; then
-        log "WAN6 interface changed: '${WAN_IFACE6}' -> '${new_wan6:-none}', rebuilding ip6 chains"
-        teardown_chains6
-        WAN_IFACE6="$new_wan6"
-        setup_chains6
-    fi
+    # Snapshot current chain state — used for dedup checks and byte reading
+    nft list chain inet bbd "$CHAIN_IN"  2>/dev/null > "$RUNTIME_DIR/nft_in_cache"
+    nft list chain inet bbd "$CHAIN_OUT" 2>/dev/null > "$RUNTIME_DIR/nft_out_cache"
 
-    # Refresh ARP snapshot, update known device registry, add iptables rules
+    # Refresh ARP snapshot, update device registry, add IPv4 rules
     get_arp_devices > "$RUNTIME_DIR/arp_snapshot"
     while IFS=' ' read -r ip mac; do
-        [ -n "$ip" ] && ensure_rules_for_ip "$ip"
+        [ -z "$ip" ] && continue
+        ensure_nft_ip4_in  "$ip"
+        ensure_nft_ip4_out "$ip"
     done < "$RUNTIME_DIR/arp_snapshot"
     update_known_devices
 
-    # Refresh NDP snapshot, add ip6tables rules for each global IPv6 address
+    # Refresh NDP snapshot, add IPv6 rules
     get_ndp_devices > "$RUNTIME_DIR/ndp_snapshot"
     while IFS=' ' read -r ip6 mac; do
-        [ -n "$ip6" ] && ensure_rules_for_ip6 "$ip6"
+        [ -z "$ip6" ] && continue
+        ensure_nft_ip6_in  "$ip6"
+        ensure_nft_ip6_out "$ip6"
     done < "$RUNTIME_DIR/ndp_snapshot"
 
     write_current_json
-
-    # Zero per-interval counters so next read gives a delta
-    iptables  -t mangle -Z "$CHAIN_IN"  2>/dev/null
-    iptables  -t mangle -Z "$CHAIN_OUT" 2>/dev/null
-    ip6tables -t mangle -Z "$CHAIN_IN"  2>/dev/null
-    ip6tables -t mangle -Z "$CHAIN_OUT" 2>/dev/null
 
     # Persist daily totals once per hour (on the hour)
     current_hour=$(date +%H | sed 's/^0//')

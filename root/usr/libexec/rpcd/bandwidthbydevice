@@ -11,8 +11,27 @@ case "$1" in
     case "$2" in
 
       devices)
-        cat /tmp/bandwidthbydevice/current.json 2>/dev/null || \
-          printf '{"ts":0,"devices":[]}\n'
+        # CPU usage: delta between successive /proc/stat reads so we get
+        # an accurate percentage for whatever interval the client is polling at.
+        _cpu_prev="/tmp/bandwidthbydevice/cpu_stat_prev"
+        set -- $(head -1 /proc/stat)
+        shift  # drop "cpu" label; $1=user $2=nice $3=system $4=idle $5=iowait $6=irq $7=softirq $8=steal
+        _active=$(($1 + $2 + $3 + $6 + $7 + ${8:-0}))
+        _total=$((_active + $4 + $5))
+        _cpu_pct=0
+        if [ -f "$_cpu_prev" ]; then
+          read -r _pt _pa < "$_cpu_prev"
+          _dt=$((_total  - _pt))
+          _da=$((_active - _pa))
+          [ "$_dt" -gt 0 ] && _cpu_pct=$(awk "BEGIN{printf \"%d\", $_da*100/$_dt}")
+        fi
+        printf '%d %d\n' "$_total" "$_active" > "$_cpu_prev"
+        _json=$(cat /tmp/bandwidthbydevice/current.json 2>/dev/null)
+        if [ -n "$_json" ]; then
+          printf '{"cpu_pct":%d,%s\n' "$_cpu_pct" "${_json#\{}"
+        else
+          printf '{"cpu_pct":%d,"ts":0,"devices":[]}\n' "$_cpu_pct"
+        fi
         ;;
 
       stats)

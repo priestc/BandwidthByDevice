@@ -5,8 +5,7 @@
 
 var callDevices = rpc.declare({
   object: 'bandwidthbydevice',
-  method: 'devices',
-  expect: { devices: [] }
+  method: 'devices'
 });
 
 function injectCSS() {
@@ -71,6 +70,7 @@ function avgBytes5min(mac) {
 }
 
 var idleTicker  = null;
+var poller      = null;
 
 function fmtIdleTime(ms) {
   var s = Math.floor(ms / 1000);
@@ -160,11 +160,36 @@ return view.extend({
       E('p', { 'class': 'bbd-loading' }, 'Loading devices...')
     ]);
 
-    poll.add(function() {
-      return callDevices().then(function(devices) {
-        renderDevices(container, devices);
-      });
-    }, 10);
+    var cpuValEl      = E('span', { 'class': 'bbd-cpu-val' }, '—');
+    var intervalValEl = E('span', { 'class': 'bbd-interval-val' }, '10s');
+
+    var slider = E('input', {
+      'type':  'range',
+      'min':   '1',
+      'max':   '10',
+      'value': '10',
+      'class': 'bbd-interval-slider'
+    });
+
+    function startPoller(sec) {
+      if (poller) poll.remove(poller);
+      poller = function() {
+        return callDevices().then(function(res) {
+          res = res || {};
+          if (res.cpu_pct != null) cpuValEl.textContent = res.cpu_pct + '%';
+          renderDevices(container, res.devices || []);
+        });
+      };
+      poll.add(poller, sec);
+    }
+
+    slider.addEventListener('input', function() {
+      var sec = parseInt(this.value, 10);
+      intervalValEl.textContent = sec + 's';
+      startPoller(sec);
+    });
+
+    startPoller(10);
 
     if (!idleTicker) {
       idleTicker = setInterval(function() {
@@ -177,6 +202,12 @@ return view.extend({
 
     return E('div', {}, [
       E('h2', 'Bandwidth by Device'),
+      E('div', { 'id': 'bbd-controls' }, [
+        E('label', { 'class': 'bbd-interval-label' }, [
+          'Update: 1s', slider, intervalValEl
+        ]),
+        E('span', { 'class': 'bbd-cpu' }, ['CPU: ', cpuValEl])
+      ]),
       container
     ]);
   },

@@ -44,19 +44,30 @@ function classifyBandwidth(downBytes, upBytes, intervalSec) {
   return BW_TIERS[BW_TIERS.length - 1];
 }
 
-// Per-device rolling window: keep last 6 samples (60 s) and classify from peak.
-// Bursty traffic (phone sync, webpage load) would otherwise snap back to Idle
-// the instant the burst ends.
+// Per-device rolling window: keep last 30 samples (5 min at 10 s/interval).
+// Peak classification uses only the most recent 6 (60 s) so bursty traffic
+// doesn't snap the badge back to Idle the instant a burst ends.
+// The full 30-sample window is used to compute the 5-minute average rate
+// shown while idle_secs < 300.
 var sampleHistory = {};
-var HISTORY_SIZE  = 6;
+var PEAK_SIZE = 6;
+var AVG_SIZE  = 30;
 
 function peakBytes(mac, downBytes, upBytes) {
   if (!sampleHistory[mac]) sampleHistory[mac] = [];
   sampleHistory[mac].push({ d: downBytes || 0, u: upBytes || 0 });
-  if (sampleHistory[mac].length > HISTORY_SIZE) sampleHistory[mac].shift();
-  return sampleHistory[mac].reduce(function(m, s) {
+  if (sampleHistory[mac].length > AVG_SIZE) sampleHistory[mac].shift();
+  var recent = sampleHistory[mac].slice(-PEAK_SIZE);
+  return recent.reduce(function(m, s) {
     return { d: Math.max(m.d, s.d), u: Math.max(m.u, s.u) };
   }, { d: 0, u: 0 });
+}
+
+function avgBytes5min(mac) {
+  var hist = sampleHistory[mac] || [];
+  var totD = 0, totU = 0;
+  hist.forEach(function(s) { totD += s.d; totU += s.u; });
+  return { d: totD, u: totU, secs: hist.length * 10 };
 }
 
 var idleTicker  = null;
@@ -78,9 +89,13 @@ function makeBadge(dev) {
   var peak = peakBytes(dev.mac, dev.down_bytes, dev.up_bytes);
   var tier = classifyBandwidth(peak.d, peak.u, 10);
   if (tier.key === 'idle') {
-    // Reconstruct absolute last-activity time from server-reported idle_secs.
-    // data-idle-base is stored as a ms timestamp so the ticker can update
-    // the display cheaply without knowing idle_secs again.
+    if ((dev.idle_secs || 0) < 300) {
+      var avg = avgBytes5min(dev.mac);
+      if (avg.secs > 0) {
+        return E('span', { 'class': 'bbd-bw-badge bbd-bw-idle' },
+          '↓ ' + fmtRate(avg.d, avg.secs) + '  ↑ ' + fmtRate(avg.u, avg.secs));
+      }
+    }
     var idleBase = Date.now() - (dev.idle_secs || 0) * 1000;
     return E('span', {
       'class': 'bbd-bw-badge bbd-bw-idle',

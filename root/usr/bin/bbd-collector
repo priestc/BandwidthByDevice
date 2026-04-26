@@ -222,9 +222,22 @@ write_current_json() {
             append_sample "$safemac" "$ts" "$down" "$up"
         fi
 
+        # Track last-activity timestamp; update whenever there are non-zero bytes.
+        local idle_secs=0
+        local last_active_file="$RUNTIME_DIR/last_active_${safemac}"
+        if [ "$down" -gt 0 ] 2>/dev/null || [ "$up" -gt 0 ] 2>/dev/null; then
+            printf '%d\n' "$ts" > "$last_active_file"
+        fi
+        if [ -f "$last_active_file" ]; then
+            local last_active_ts
+            read -r last_active_ts < "$last_active_file"
+            idle_secs=$((ts - last_active_ts))
+            [ "$idle_secs" -lt 0 ] && idle_secs=0
+        fi
+
         [ "$first" -eq 0 ] && printf ',' >> "$tmpfile"
-        printf '{"ip":"%s","mac":"%s","hostname":"%s","down_bytes":%s,"up_bytes":%s,"active":%s}' \
-            "$ip" "$mac" "$hostname" "$down" "$up" "$active" >> "$tmpfile"
+        printf '{"ip":"%s","mac":"%s","hostname":"%s","down_bytes":%s,"up_bytes":%s,"active":%s,"idle_secs":%d}' \
+            "$ip" "$mac" "$hostname" "$down" "$up" "$active" "$idle_secs" >> "$tmpfile"
         first=0
     done < "$DEVICES_FILE"
     printf ']}\n' >> "$tmpfile"

@@ -59,7 +59,6 @@ function peakBytes(mac, downBytes, upBytes) {
   }, { d: 0, u: 0 });
 }
 
-var idleSince   = {};
 var idleTicker  = null;
 
 function fmtIdleTime(ms) {
@@ -73,20 +72,21 @@ function fmtIdleTime(ms) {
 
 function makeBadge(dev) {
   if (!dev.active) {
-    delete idleSince[dev.mac];
     delete sampleHistory[dev.mac];
     return E('span', { 'class': 'bbd-bw-badge bbd-bw-offline' }, 'Offline');
   }
   var peak = peakBytes(dev.mac, dev.down_bytes, dev.up_bytes);
   var tier = classifyBandwidth(peak.d, peak.u, 10);
   if (tier.key === 'idle') {
-    if (!idleSince[dev.mac]) idleSince[dev.mac] = Date.now();
+    // Reconstruct absolute last-activity time from server-reported idle_secs.
+    // data-idle-base is stored as a ms timestamp so the ticker can update
+    // the display cheaply without knowing idle_secs again.
+    var idleBase = Date.now() - (dev.idle_secs || 0) * 1000;
     return E('span', {
       'class': 'bbd-bw-badge bbd-bw-idle',
-      'data-idle-since': String(idleSince[dev.mac])
-    }, 'Idle ' + fmtIdleTime(Date.now() - idleSince[dev.mac]));
+      'data-idle-base': String(idleBase)
+    }, 'Idle ' + fmtIdleTime(Date.now() - idleBase));
   }
-  delete idleSince[dev.mac];
   return E('span', { 'class': 'bbd-bw-badge bbd-bw-' + tier.key }, tier.label);
 }
 
@@ -153,9 +153,9 @@ return view.extend({
 
     if (!idleTicker) {
       idleTicker = setInterval(function() {
-        document.querySelectorAll('.bbd-bw-idle[data-idle-since]').forEach(function(el) {
-          var since = parseInt(el.getAttribute('data-idle-since'), 10);
-          el.textContent = 'Idle ' + fmtIdleTime(Date.now() - since);
+        document.querySelectorAll('.bbd-bw-idle[data-idle-base]').forEach(function(el) {
+          var base = parseInt(el.getAttribute('data-idle-base'), 10);
+          el.textContent = 'Idle ' + fmtIdleTime(Date.now() - base);
         });
       }, 1000);
     }

@@ -8,6 +8,7 @@ An OpenWRT LuCI plugin for intuitive per-device bandwidth monitoring.
 - **Live graphs** — rolling 5-minute sparkline for each device, updated every 10 seconds
 - **Historical stats** — daily totals stored persistently; view 24h / 7-day / 30-day bar charts per device
 - **Summary stats** — total downloaded, total uploaded, peak download, and peak upload per device
+- **Remote persistence** — continuously ships bandwidth records to a remote server in a compact JSONL format, building a complete long-term archive
 
 ## How it works
 
@@ -52,6 +53,44 @@ chmod +x /usr/bin/bbd-collector /etc/init.d/bandwidthbydevice
 /etc/init.d/bandwidthbydevice enable
 /etc/init.d/bandwidthbydevice start
 ```
+
+## Remote Persistence
+
+### Philosophy
+
+This project takes a **completionist** approach to bandwidth recording. Routers have limited flash storage, so on-device history is intentionally short — only enough to power the real-time UI. The router's job is not to be an archive; it is to be an accurate real-time sensor that continuously ships data off to a remote server where storage is cheap and unlimited.
+
+The two purposes of this plugin are:
+1. **Real-time view** — give an accurate, live picture of who is using bandwidth right now.
+2. **Continuous recording** — ship that accurate data to another device for long-term browsing and analysis by an ingestion project.
+
+### How records are persisted
+
+Every hour, the router appends new records to a single growing file on the remote server: `BandwidthByDevice_OpenWRT.jsonl` (inside Remote Path if configured, otherwise in the SSH home directory). Nothing is ever deleted or summarised — every hour of activity is preserved in chronological order in one file, ready to be ingested by an external project for long-term browsing.
+
+### Record format (JSONL)
+
+Each line in every file is a self-contained JSON object representing one device's bandwidth for one hour:
+
+```json
+{"ts":1745589600,"period":"2026-04-25T13:00","mac":"aa:bb:cc:dd:ee:ff","hostname":"iPhone","bytes_in":12345678,"bytes_out":9876543}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `ts` | integer | Unix timestamp when the record was created |
+| `period` | string | Start of the hour this record covers (ISO 8601, local time) |
+| `mac` | string | Device MAC address |
+| `hostname` | string | Hostname from DHCP leases, or IP address if no lease exists |
+| `bytes_in` | integer | Bytes downloaded by this device during the hour |
+| `bytes_out` | integer | Bytes uploaded by this device during the hour |
+
+Devices with zero activity during an hour are omitted. Each `.jsonl` file can be read line-by-line; no JSON parsing of the whole file is required.
+
+### Requirements
+
+- `sshpass` on the router: `opkg install sshpass`
+- SSH access with password auth to the remote server (SCP is used for transfers; SSH exec is used for the daily/monthly/yearly roll-up merges)
 
 ## Dependencies
 

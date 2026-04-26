@@ -59,7 +59,8 @@ function peakBytes(mac, downBytes, upBytes) {
   }, { d: 0, u: 0 });
 }
 
-var idleSince = {};
+var idleSince   = {};
+var idleTicker  = null;
 
 function fmtIdleTime(ms) {
   var s = Math.floor(ms / 1000);
@@ -80,8 +81,10 @@ function makeBadge(dev) {
   var tier = classifyBandwidth(peak.d, peak.u, 10);
   if (tier.key === 'idle') {
     if (!idleSince[dev.mac]) idleSince[dev.mac] = Date.now();
-    var elapsed = fmtIdleTime(Date.now() - idleSince[dev.mac]);
-    return E('span', { 'class': 'bbd-bw-badge bbd-bw-idle' }, 'Idle ' + elapsed);
+    return E('span', {
+      'class': 'bbd-bw-badge bbd-bw-idle',
+      'data-idle-since': String(idleSince[dev.mac])
+    }, 'Idle ' + fmtIdleTime(Date.now() - idleSince[dev.mac]));
   }
   delete idleSince[dev.mac];
   return E('span', { 'class': 'bbd-bw-badge bbd-bw-' + tier.key }, tier.label);
@@ -147,6 +150,15 @@ return view.extend({
         renderDevices(container, devices);
       });
     }, 10);
+
+    if (!idleTicker) {
+      idleTicker = setInterval(function() {
+        document.querySelectorAll('.bbd-bw-idle[data-idle-since]').forEach(function(el) {
+          var since = parseInt(el.getAttribute('data-idle-since'), 10);
+          el.textContent = 'Idle ' + fmtIdleTime(Date.now() - since);
+        });
+      }, 1000);
+    }
 
     return E('div', {}, [
       E('h2', 'Bandwidth by Device'),

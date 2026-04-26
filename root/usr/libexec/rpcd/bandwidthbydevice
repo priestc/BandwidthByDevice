@@ -2,7 +2,7 @@
 
 case "$1" in
   list)
-    printf '{"devices":{},"stats":{"mac":"String"},"history":{"mac":"String"},"get_backup_config":{},"set_backup_config":{"protocol":"String","host":"String","port":"String","username":"String","password":"String","remote_path":"String"},"run_backup":{},"run_restore":{},"get_backup_status":{}}\n'
+    printf '{"devices":{},"stats":{"mac":"String"},"history":{"mac":"String"},"get_backup_config":{},"set_backup_config":{"host":"String","port":"String","username":"String","password":"String","remote_path":"String","auto_backup":"String"},"run_backup":{},"get_backup_status":{}}\n'
     ;;
   call)
     # rpcd passes method params via stdin as JSON, not as $3
@@ -30,33 +30,43 @@ case "$1" in
         ;;
 
       get_backup_config)
-        printf '{"protocol":"%s","host":"%s","port":"%s","username":"%s","remote_path":"%s"}\n' \
-          "$(uci -q get bandwidthbydevice.backup.protocol  || echo sftp)" \
-          "$(uci -q get bandwidthbydevice.backup.host      || echo '')" \
-          "$(uci -q get bandwidthbydevice.backup.port      || echo 22)" \
-          "$(uci -q get bandwidthbydevice.backup.username  || echo '')" \
-          "$(uci -q get bandwidthbydevice.backup.remote_path || echo '/backup/bandwidthbydevice')"
+        printf '{"host":"%s","port":"%s","username":"%s","remote_path":"%s","auto_backup":"%s"}\n' \
+          "$(uci -q get bandwidthbydevice.backup.host        || echo '')" \
+          "$(uci -q get bandwidthbydevice.backup.port        || echo 22)" \
+          "$(uci -q get bandwidthbydevice.backup.username    || echo '')" \
+          "$(uci -q get bandwidthbydevice.backup.remote_path || echo '')" \
+          "$(uci -q get bandwidthbydevice.backup.auto_backup || echo '0')"
         ;;
 
       set_backup_config)
         uci -q get bandwidthbydevice.backup >/dev/null 2>&1 || \
           uci set bandwidthbydevice.backup=backup
-        for key in protocol host port username password remote_path; do
+        for key in host port username password remote_path; do
           val=$(echo "$INPUT" | jsonfilter -e "@.${key}" 2>/dev/null)
-          [ -n "$val" ] && uci set "bandwidthbydevice.backup.${key}=${val}"
+          if [ -n "$val" ]; then
+            uci set "bandwidthbydevice.backup.${key}=${val}"
+          elif [ "$key" = "remote_path" ]; then
+            uci -q delete "bandwidthbydevice.backup.remote_path"
+          fi
         done
+        auto_backup=$(echo "$INPUT" | jsonfilter -e '@.auto_backup' 2>/dev/null)
+        uci set "bandwidthbydevice.backup.auto_backup=${auto_backup:-0}"
+        if [ "$auto_backup" = "1" ]; then
+          mkdir -p /etc/crontabs
+          grep -qF 'bbd-backup hourly' /etc/crontabs/root 2>/dev/null || \
+            printf '0 * * * * /usr/bin/bbd-backup hourly\n' >> /etc/crontabs/root
+          /etc/init.d/cron enable 2>/dev/null
+          /etc/init.d/cron reload 2>/dev/null || /etc/init.d/cron start 2>/dev/null
+        else
+          sed -i '/\/usr\/bin\/bbd-backup/d' /etc/crontabs/root 2>/dev/null
+          /etc/init.d/cron reload 2>/dev/null
+        fi
         uci commit bandwidthbydevice
         printf '{"result":"ok"}\n'
         ;;
 
       run_backup)
-        /usr/bin/bbd-backup backup >/dev/null 2>&1
-        cat /tmp/bandwidthbydevice/backup_status.json 2>/dev/null || \
-          printf '{"status":"error","message":"Script produced no output","ts":0}\n'
-        ;;
-
-      run_restore)
-        /usr/bin/bbd-backup restore >/dev/null 2>&1
+        /usr/bin/bbd-backup hourly >/dev/null 2>&1
         cat /tmp/bandwidthbydevice/backup_status.json 2>/dev/null || \
           printf '{"status":"error","message":"Script produced no output","ts":0}\n'
         ;;

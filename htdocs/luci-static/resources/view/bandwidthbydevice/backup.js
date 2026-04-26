@@ -11,17 +11,12 @@ var callGetConfig = rpc.declare({
 var callSetConfig = rpc.declare({
   object: 'bandwidthbydevice',
   method: 'set_backup_config',
-  params: ['protocol', 'host', 'port', 'username', 'password', 'remote_path']
+  params: ['host', 'port', 'username', 'password', 'remote_path', 'auto_backup']
 });
 
-var callRunBackup = rpc.declare({
+var callRunPersist = rpc.declare({
   object: 'bandwidthbydevice',
   method: 'run_backup'
-});
-
-var callRunRestore = rpc.declare({
-  object: 'bandwidthbydevice',
-  method: 'run_restore'
 });
 
 var callGetStatus = rpc.declare({
@@ -66,33 +61,29 @@ return view.extend({
     var cfg    = (data && data[0]) || {};
     var status = (data && data[1]) || {};
 
-    var proto   = E('select', { 'id': 'bbd-proto',    'class': 'bbd-input' }, [
-      E('option', { value: 'sftp', selected: cfg.protocol !== 'scp' ? '' : null }, 'SFTP (via curl)'),
-      E('option', { value: 'scp',  selected: cfg.protocol === 'scp'  ? '' : null }, 'SCP (requires sshpass)')
-    ]);
-    var host    = E('input', { 'id': 'bbd-host',     'class': 'bbd-input', type: 'text',     value: cfg.host         || '', placeholder: 'e.g. 192.168.1.100 or nas.local' });
-    var port    = E('input', { 'id': 'bbd-port',     'class': 'bbd-input', type: 'number',   value: cfg.port         || '22', min: 1, max: 65535 });
-    var user    = E('input', { 'id': 'bbd-user',     'class': 'bbd-input', type: 'text',     value: cfg.username     || '', placeholder: 'username' });
-    var pass    = E('input', { 'id': 'bbd-pass',     'class': 'bbd-input', type: 'password', value: '',               placeholder: cfg.username ? '(unchanged)' : 'password' });
-    var rpath   = E('input', { 'id': 'bbd-rpath',    'class': 'bbd-input', type: 'text',     value: cfg.remote_path  || '/backup/bandwidthbydevice', placeholder: '/backup/bandwidthbydevice' });
+    var host       = E('input', { 'id': 'bbd-host',       'class': 'bbd-input', type: 'text',     value: cfg.host         || '', placeholder: 'e.g. 192.168.1.100 or nas.local' });
+    var port       = E('input', { 'id': 'bbd-port',       'class': 'bbd-input', type: 'number',   value: cfg.port         || '22', min: 1, max: 65535 });
+    var user       = E('input', { 'id': 'bbd-user',       'class': 'bbd-input', type: 'text',     value: cfg.username     || '', placeholder: 'username' });
+    var pass       = E('input', { 'id': 'bbd-pass',       'class': 'bbd-input', type: 'password', value: '',               placeholder: cfg.username ? '(unchanged)' : 'password' });
+    var rpath      = E('input', { 'id': 'bbd-rpath',      'class': 'bbd-input', type: 'text',     value: cfg.remote_path  || '', placeholder: '/ (home directory)' });
+    var autoBackup = E('input', { 'id': 'bbd-auto-backup','class': 'bbd-input', type: 'checkbox', checked: cfg.auto_backup === '1' ? '' : null });
 
-    var saveBtn    = E('button', { 'class': 'bbd-btn' },           'Save Settings');
-    var backupBtn  = E('button', { 'class': 'bbd-btn bbd-btn-primary' }, 'Backup Now');
-    var restoreBtn = E('button', { 'class': 'bbd-btn bbd-btn-danger' },  'Restore from Backup');
+    var saveBtn    = E('button', { 'class': 'bbd-btn' },              'Save Settings');
+    var persistBtn = E('button', { 'class': 'bbd-btn bbd-btn-primary' }, 'Persist Now');
 
     var statusEl = E('div', { 'class': 'bbd-backup-status bbd-status-' + status.status });
-    setStatus(statusEl, status.status || 'never', status.message || 'No backup has been run yet', status.ts);
+    setStatus(statusEl, status.status || 'never', status.message || 'No data has been persisted yet', status.ts);
 
     saveBtn.addEventListener('click', function() {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving…';
       callSetConfig(
-        proto.value,
         host.value,
         port.value,
         user.value,
         pass.value || undefined,
-        rpath.value
+        rpath.value,
+        autoBackup.checked ? '1' : '0'
       ).then(function() {
         saveBtn.textContent = 'Saved ✓';
         pass.placeholder = '(unchanged)';
@@ -101,56 +92,25 @@ return view.extend({
           saveBtn.textContent = 'Save Settings';
           saveBtn.disabled = false;
         }, 2000);
-      }).catch(function(err) {
+      }).catch(function() {
         saveBtn.textContent = 'Error — try again';
         saveBtn.disabled = false;
       });
     });
 
-    backupBtn.addEventListener('click', function() {
-      backupBtn.disabled = true;
-      backupBtn.textContent = 'Backing up…';
-      setStatus(statusEl, 'running', 'Backup in progress…', null);
-      callRunBackup().then(function(result) {
+    persistBtn.addEventListener('click', function() {
+      persistBtn.disabled = true;
+      persistBtn.textContent = 'Persisting…';
+      setStatus(statusEl, 'running', 'Persisting current hour…', null);
+      callRunPersist().then(function(result) {
         setStatus(statusEl, result.status, result.message, result.ts);
-        backupBtn.textContent = 'Backup Now';
-        backupBtn.disabled = false;
+        persistBtn.textContent = 'Persist Now';
+        persistBtn.disabled = false;
       }).catch(function() {
         setStatus(statusEl, 'error', 'RPC call failed', null);
-        backupBtn.textContent = 'Backup Now';
-        backupBtn.disabled = false;
+        persistBtn.textContent = 'Persist Now';
+        persistBtn.disabled = false;
       });
-    });
-
-    restoreBtn.addEventListener('click', function() {
-      ui.showModal('Restore from Backup', [
-        E('p', 'This will overwrite all current bandwidth history with the data from the backup server. This cannot be undone.'),
-        E('p', E('strong', 'Are you sure?')),
-        E('div', { 'class': 'right' }, [
-          E('button', {
-            'class': 'btn',
-            click: ui.hideModal
-          }, 'Cancel'),
-          E('button', {
-            'class': 'btn cbi-button-negative',
-            click: function() {
-              ui.hideModal();
-              restoreBtn.disabled = true;
-              restoreBtn.textContent = 'Restoring…';
-              setStatus(statusEl, 'running', 'Restore in progress…', null);
-              callRunRestore().then(function(result) {
-                setStatus(statusEl, result.status, result.message, result.ts);
-                restoreBtn.textContent = 'Restore from Backup';
-                restoreBtn.disabled = false;
-              }).catch(function() {
-                setStatus(statusEl, 'error', 'RPC call failed', null);
-                restoreBtn.textContent = 'Restore from Backup';
-                restoreBtn.disabled = false;
-              });
-            }
-          }, 'Yes, Restore')
-        ])
-      ]);
     });
 
     function row(labelText, inputEl) {
@@ -165,16 +125,16 @@ return view.extend({
     }
 
     var formDiv = document.createElement('div');
-    formDiv.appendChild(row('Protocol',    proto));
-    formDiv.appendChild(row('Host',        host));
-    formDiv.appendChild(row('Port',        port));
-    formDiv.appendChild(row('Username',    user));
-    formDiv.appendChild(row('Password',    pass));
-    formDiv.appendChild(row('Remote Path', rpath));
+    formDiv.appendChild(row('Host',                  host));
+    formDiv.appendChild(row('Port',                  port));
+    formDiv.appendChild(row('Username',              user));
+    formDiv.appendChild(row('Password',              pass));
+    formDiv.appendChild(row('Remote Path',           rpath));
+    formDiv.appendChild(row('Auto-persist (hourly)', autoBackup));
 
     var hint = document.createElement('p');
     hint.className = 'bbd-hint';
-    hint.textContent = 'Remote Path is the absolute path on the server where the backup file will be stored. The directory must exist. For SCP, sshpass must be installed on the router.';
+    hint.textContent = 'Remote Path is the root directory for persisted data on the server. Leave blank to use the SSH home directory. sshpass must be installed on the router (opkg install sshpass).';
 
     var settingsSection = document.createElement('div');
     settingsSection.className = 'bbd-section';
@@ -187,31 +147,30 @@ return view.extend({
 
     var actionRow = document.createElement('div');
     actionRow.className = 'bbd-action-row';
-    actionRow.appendChild(backupBtn);
-    actionRow.appendChild(restoreBtn);
+    actionRow.appendChild(persistBtn);
 
     var statusLabel = document.createElement('div');
     statusLabel.className = 'bbd-status-label';
     statusLabel.textContent = 'Last operation:';
 
-    var backupSection = document.createElement('div');
-    backupSection.className = 'bbd-section';
+    var persistSection = document.createElement('div');
+    persistSection.className = 'bbd-section';
     var h3b = document.createElement('h3');
-    h3b.textContent = 'Backup & Restore';
+    h3b.textContent = 'Remote Persistence';
     var desc = document.createElement('p');
-    desc.textContent = 'Backup saves all historical bandwidth data to the remote server as a single archive. Restore retrieves that archive and replaces current data.';
-    backupSection.appendChild(h3b);
-    backupSection.appendChild(desc);
-    backupSection.appendChild(actionRow);
-    backupSection.appendChild(statusLabel);
-    backupSection.appendChild(statusEl);
+    desc.textContent = 'Appends a per-device bandwidth record for the current hour to BandwidthByDevice_OpenWRT.jsonl on the remote server. When auto-persist is enabled this runs every hour, building a complete, ever-growing history file.';
+    persistSection.appendChild(h3b);
+    persistSection.appendChild(desc);
+    persistSection.appendChild(actionRow);
+    persistSection.appendChild(statusLabel);
+    persistSection.appendChild(statusEl);
 
     var page = document.createElement('div');
     var h2 = document.createElement('h2');
-    h2.textContent = 'Bandwidth by Device — Backup & Restore';
+    h2.textContent = 'Bandwidth by Device — Remote Persistence';
     page.appendChild(h2);
     page.appendChild(settingsSection);
-    page.appendChild(backupSection);
+    page.appendChild(persistSection);
     return page;
   },
 

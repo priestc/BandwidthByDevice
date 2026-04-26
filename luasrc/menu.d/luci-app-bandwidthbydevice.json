@@ -7,17 +7,26 @@
       "path": "bandwidthbydevice/overview"
     }
   },
-  "admin/status/bandwidthbydevice/device": {
-    "title": "Device Detail",
+  "admin/status/bandwidthbydevice/overview": {
+    "title": "Overview",
     "order": 1,
     "action": {
       "type": "view",
-      "path": "bandwidthbydevice/device"
+      "path": "bandwidthbydevice/overview"
     }
   },
-  "admin/status/bandwidthbydevice/backup": {
-    "title": "Backup & Restore",
+  "admin/status/bandwidthbydevice/device": {
+    "title": "Device Detail",
     "order": 2,
+    "action": {
+      "type": "view",
+      "path": "bandwidthbydevice/device"
+    },
+    "hidden": true
+  },
+  "admin/status/bandwidthbydevice/backup": {
+    "title": "Remote Persistence",
+    "order": 3,
     "action": {
       "type": "view",
       "path": "bandwidthbydevice/backup"

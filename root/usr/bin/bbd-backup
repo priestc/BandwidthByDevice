@@ -1,11 +1,11 @@
 #!/bin/sh
-# bbd-backup: backup and restore bandwidth history to/from a remote server.
-# Usage: bbd-backup backup | bbd-backup restore
+# bbd-backup: remote persistence for bandwidth history.
+# Usage: bbd-backup hourly
 
 PERSIST_DIR="/etc/bandwidthbydevice"
 RUNTIME_DIR="/tmp/bandwidthbydevice"
 STATUS_FILE="$RUNTIME_DIR/backup_status.json"
-ARCHIVE_NAME="bandwidth_backup.tar.gz"
+DEVICES_FILE="$PERSIST_DIR/known_devices"
 
 mkdir -p "$RUNTIME_DIR"
 
@@ -13,144 +13,80 @@ cfg() { uci -q get "bandwidthbydevice.backup.$1"; }
 
 write_status() {
     local status="$1" msg="$2"
+    msg=$(printf '%s' "$msg" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g')
     printf '{"status":"%s","message":"%s","ts":%d}\n' \
         "$status" "$msg" "$(date +%s)" > "$STATUS_FILE"
 }
 
-# Write credentials to a temp netrc file so they never appear in process list
-make_netrc() {
-    local host="$1" user="$2" pass="$3"
-    local f
-    f=$(mktemp)
-    chmod 600 "$f"
-    printf 'machine %s\nlogin %s\npassword %s\n' "$host" "$user" "$pass" > "$f"
-    echo "$f"
-}
-
-do_backup() {
-    local proto host port user pass path
-    proto=$(cfg protocol); proto=${proto:-sftp}
-    host=$(cfg host)
-    port=$(cfg port);      port=${port:-22}
-    user=$(cfg username)
+do_hourly() {
+    local host port user pass path
+    host=$(cfg host);     [ -z "$host" ] && { write_status "error" "No host configured"; exit 1; }
+    port=$(cfg port);     port=${port:-22}
+    user=$(cfg username); [ -z "$user" ] && { write_status "error" "No username configured"; exit 1; }
     pass=$(cfg password)
-    path=$(cfg remote_path); path=${path:-/backup/bandwidthbydevice}
+    path=$(cfg remote_path); path="${path%/}"
 
-    [ -z "$host" ] && { write_status "error" "No host configured"; exit 1; }
-    [ -z "$user" ] && { write_status "error" "No username configured"; exit 1; }
-
-    local archive
-    archive=$(mktemp /tmp/bbd-backup-XXXXXX.tar.gz)
-
-    tar -czf "$archive" -C "$PERSIST_DIR" . 2>/dev/null || {
-        rm -f "$archive"
-        write_status "error" "Failed to create archive"
-        exit 1
-    }
-
-    local rc output
-    case "$proto" in
-      sftp)
-        local netrc
-        netrc=$(make_netrc "$host" "$user" "$pass")
-        output=$(curl -s --netrc-file "$netrc" --ftp-create-dirs \
-            "sftp://${host}:${port}${path}/${ARCHIVE_NAME}" \
-            -T "$archive" 2>&1)
-        rc=$?
-        rm -f "$netrc"
-        ;;
-      scp)
-        if ! which sshpass >/dev/null 2>&1; then
-            rm -f "$archive"
-            write_status "error" "sshpass not installed — run: opkg install sshpass"
-            exit 1
-        fi
-        output=$(sshpass -p "$pass" scp \
-            -P "$port" -o StrictHostKeyChecking=no -o BatchMode=no \
-            "$archive" "${user}@${host}:${path}/${ARCHIVE_NAME}" 2>&1)
-        rc=$?
-        ;;
-      *)
-        rm -f "$archive"
-        write_status "error" "Unknown protocol: $proto"
-        exit 1
-        ;;
-    esac
-
-    rm -f "$archive"
-
-    if [ "$rc" -eq 0 ]; then
-        write_status "ok" "Backup completed — $(date '+%Y-%m-%d %H:%M:%S')"
-    else
-        write_status "error" "Transfer failed: $output"
-        exit 1
-    fi
-}
-
-do_restore() {
-    local proto host port user pass path
-    proto=$(cfg protocol); proto=${proto:-sftp}
-    host=$(cfg host)
-    port=$(cfg port);      port=${port:-22}
-    user=$(cfg username)
-    pass=$(cfg password)
-    path=$(cfg remote_path); path=${path:-/backup/bandwidthbydevice}
-
-    [ -z "$host" ] && { write_status "error" "No host configured"; exit 1; }
-
-    local archive
-    archive=$(mktemp /tmp/bbd-restore-XXXXXX.tar.gz)
-
-    local rc output
-    case "$proto" in
-      sftp)
-        local netrc
-        netrc=$(make_netrc "$host" "$user" "$pass")
-        output=$(curl -s --netrc-file "$netrc" \
-            "sftp://${host}:${port}${path}/${ARCHIVE_NAME}" \
-            -o "$archive" 2>&1)
-        rc=$?
-        rm -f "$netrc"
-        ;;
-      scp)
-        if ! which sshpass >/dev/null 2>&1; then
-            rm -f "$archive"
-            write_status "error" "sshpass not installed — run: opkg install sshpass"
-            exit 1
-        fi
-        output=$(sshpass -p "$pass" scp \
-            -P "$port" -o StrictHostKeyChecking=no -o BatchMode=no \
-            "${user}@${host}:${path}/${ARCHIVE_NAME}" "$archive" 2>&1)
-        rc=$?
-        ;;
-      *)
-        rm -f "$archive"
-        write_status "error" "Unknown protocol: $proto"
-        exit 1
-        ;;
-    esac
-
-    if [ "$rc" -ne 0 ]; then
-        rm -f "$archive"
-        write_status "error" "Download failed: $output"
+    if ! which sshpass >/dev/null 2>&1; then
+        write_status "error" "sshpass not installed — run: opkg install sshpass"
         exit 1
     fi
 
-    mkdir -p "$PERSIST_DIR"
-    tar -xzf "$archive" -C "$PERSIST_DIR" 2>/dev/null
+    [ -f "$DEVICES_FILE" ] || { write_status "error" "No device data available"; exit 1; }
+
+    local ts
+    ts=$(date +%s)
+
+    # Label the hour that just completed
+    local period
+    period=$(awk "BEGIN{print strftime(\"%Y-%m-%dT%H:00\", $ts - 3600)}")
+
+    local tmpfile
+    tmpfile=$(mktemp /tmp/bbd-persist-XXXXXX)
+
+    while IFS=' ' read -r mac ip hostname; do
+        [ -z "$mac" ] && continue
+        local safemac
+        safemac=$(echo "$mac" | tr -d ':')
+
+        local statfile="$RUNTIME_DIR/stats_${safemac}.json"
+        local down=0 up=0
+        if [ -f "$statfile" ]; then
+            down=$(grep -o '"down":[0-9]*' "$statfile" | awk -F: '{s+=$2}END{print s+0}')
+            up=$(  grep -o '"up":[0-9]*'   "$statfile" | awk -F: '{s+=$2}END{print s+0}')
+        fi
+
+        # Skip devices with no activity this hour
+        [ "${down:-0}" -eq 0 ] && [ "${up:-0}" -eq 0 ] && continue
+
+        printf '{"ts":%d,"period":"%s","mac":"%s","hostname":"%s","bytes_in":%s,"bytes_out":%s}\n' \
+            "$ts" "$period" "$mac" "$hostname" "$down" "$up" >> "$tmpfile"
+    done < "$DEVICES_FILE"
+
+    local dest_file dir_dest
+    dest_file="${path:+${path}/}BandwidthByDevice_OpenWRT.jsonl"
+    dir_dest=$(dirname "$dest_file")
+
+    # Ensure remote directory exists, then append new records to the history file
+    sshpass -p "$pass" ssh \
+        -p "$port" -o StrictHostKeyChecking=no \
+        "${user}@${host}" "mkdir -p '${dir_dest}'" >/dev/null 2>&1
+
+    local rc output
+    output=$(sshpass -p "$pass" ssh \
+        -p "$port" -o StrictHostKeyChecking=no \
+        "${user}@${host}" "cat >> '${dest_file}'" < "$tmpfile" 2>&1)
     rc=$?
-    rm -f "$archive"
+    rm -f "$tmpfile"
 
     if [ "$rc" -eq 0 ]; then
-        write_status "ok" "Restore completed — $(date '+%Y-%m-%d %H:%M:%S')"
+        write_status "ok" "Appended ${period} to ${user}@${host}:${dest_file} — $(date '+%Y-%m-%d %H:%M:%S')"
     else
-        write_status "error" "Failed to extract backup archive"
+        write_status "error" "Persistence failed: $output"
         exit 1
     fi
 }
 
 case "$1" in
-  backup)  do_backup  ;;
-  restore) do_restore ;;
-  *) echo "Usage: $0 backup|restore"; exit 1 ;;
+  hourly) do_hourly ;;
+  *) echo "Usage: $0 hourly"; exit 1 ;;
 esac

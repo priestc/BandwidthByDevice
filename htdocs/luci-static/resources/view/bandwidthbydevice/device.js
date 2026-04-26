@@ -100,7 +100,7 @@ return view.extend({
     });
 
     var wrapper = E('div', {}, [
-      E('p', {}, E('a', { 'href': L.url('admin/status/bandwidthbydevice') }, '← Back to overview')),
+      E('p', {}, E('a', { 'href': L.url('admin/status/bandwidthbydevice/overview') }, '← Back to overview')),
       nameEl, metaEl,
       E('div', { 'class': 'bbd-chart-section' }, [
         E('h4', 'Live Bandwidth (last 5 minutes)'),
@@ -183,10 +183,10 @@ return view.extend({
     this.__histChart.data.datasets[1].data = slice.map(function(d) { return d.up;   });
     this.__histChart.update();
 
-    var totalDown = daily.reduce(function(s, d) { return s + (d.down || 0); }, 0);
-    var totalUp   = daily.reduce(function(s, d) { return s + (d.up   || 0); }, 0);
-    var peakDown  = Math.max.apply(null, daily.map(function(d) { return d.down || 0; }).concat([0]));
-    var peakUp    = Math.max.apply(null, daily.map(function(d) { return d.up   || 0; }).concat([0]));
+    var totalDown = slice.reduce(function(s, d) { return s + (d.down || 0); }, 0);
+    var totalUp   = slice.reduce(function(s, d) { return s + (d.up   || 0); }, 0);
+    var peakDown  = Math.max.apply(null, slice.map(function(d) { return d.down || 0; }).concat([0]));
+    var peakUp    = Math.max.apply(null, slice.map(function(d) { return d.up   || 0; }).concat([0]));
 
     document.getElementById('bbd-total-down').textContent = fmtBytes(totalDown);
     document.getElementById('bbd-total-up'  ).textContent = fmtBytes(totalUp);

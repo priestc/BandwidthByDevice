@@ -131,6 +131,51 @@
   opacity: 0.45;
 }
 
+/* storage info */
+
+.bbd-storage-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 700px) {
+  .bbd-storage-grid { grid-template-columns: 1fr; }
+}
+
+.bbd-storage-col h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9em;
+  color: #444;
+}
+
+.bbd-storage-stat {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.3rem;
+  font-size: 0.88em;
+}
+
+.bbd-storage-label {
+  color: #888;
+  min-width: 11em;
+  flex-shrink: 0;
+}
+
+.bbd-storage-value {
+  color: #222;
+}
+
+.bbd-interval-input {
+  width: 80px;
+}
+
+.bbd-interval-hint {
+  color: #888;
+  font-size: 0.9em;
+}
+
 /* backup page */
 
 .bbd-section {

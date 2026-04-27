@@ -2,7 +2,7 @@
 
 case "$1" in
   list)
-    printf '{"devices":{},"stats":{"mac":"String"},"history":{"mac":"String"},"get_backup_config":{},"set_backup_config":{"host":"String","port":"String","username":"String","password":"String","remote_path":"String","auto_backup":"String"},"run_backup":{},"get_backup_status":{}}\n'
+    printf '{"devices":{},"stats":{"mac":"String"},"history":{"mac":"String"},"get_backup_config":{},"set_backup_config":{"host":"String","port":"String","username":"String","password":"String","remote_path":"String","auto_backup":"String"},"run_backup":{},"get_backup_status":{},"get_storage_info":{},"set_interval":{"interval":"String"}}\n'
     ;;
   call)
     # rpcd passes method params via stdin as JSON, not as $3
@@ -93,6 +93,45 @@ case "$1" in
       get_backup_status)
         cat /tmp/bandwidthbydevice/backup_status.json 2>/dev/null || \
           printf '{"status":"never","message":"No backup has been run yet","ts":0}\n'
+        ;;
+
+      get_storage_info)
+        _buf="/tmp/bandwidthbydevice/persist_buf.jsonl"
+        _buf_size=0; _buf_lines=0; _buf_start=0; _buf_end=0
+        if [ -f "$_buf" ]; then
+          _buf_size=$(wc -c < "$_buf" 2>/dev/null || echo 0)
+          _buf_lines=$(wc -l < "$_buf" 2>/dev/null || echo 0)
+          if [ "${_buf_lines:-0}" -gt 0 ]; then
+            _buf_start=$(awk 'NR==1{split($0,a,"\"ts\":"); split(a[2],b,","); print b[1]+0; exit}' "$_buf" 2>/dev/null)
+            _buf_end=$(tail -1 "$_buf" 2>/dev/null | awk '{split($0,a,"\"ts\":"); split(a[2],b,","); print b[1]+0}' 2>/dev/null)
+          fi
+        fi
+        _sum_size=0; _sum_count=0
+        for _f in /etc/bandwidthbydevice/persist_summary_*.json; do
+          [ -f "$_f" ] || continue
+          _sz=$(wc -c < "$_f" 2>/dev/null || echo 0)
+          _sum_size=$((_sum_size + _sz))
+          _sum_count=$((_sum_count + 1))
+        done
+        _interval=$(uci -q get bandwidthbydevice.sampling.interval 2>/dev/null || echo 10)
+        _limit_kb=$(uci -q get bandwidthbydevice.persist.buf_limit_kb 2>/dev/null || echo 2048)
+        printf '{"buf_size":%d,"buf_lines":%d,"buf_start_ts":%d,"buf_end_ts":%d,"summary_size":%d,"summary_count":%d,"interval":%d,"buf_limit_kb":%d}\n' \
+          "${_buf_size:-0}" "${_buf_lines:-0}" "${_buf_start:-0}" "${_buf_end:-0}" \
+          "${_sum_size:-0}" "${_sum_count:-0}" "${_interval:-10}" "${_limit_kb:-2048}"
+        ;;
+
+      set_interval)
+        _interval=$(echo "$INPUT" | jsonfilter -e '@.interval' 2>/dev/null)
+        if [ -n "$_interval" ]; then
+          uci -q get bandwidthbydevice.sampling >/dev/null 2>&1 || \
+            uci set bandwidthbydevice.sampling=sampling
+          uci set "bandwidthbydevice.sampling.interval=${_interval}"
+          uci commit bandwidthbydevice
+          printf '%d\n' "$_interval" > /tmp/bandwidthbydevice/interval
+          printf '{"result":"ok"}\n'
+        else
+          printf '{"result":"error","message":"missing interval"}\n'
+        fi
         ;;
 
       *)

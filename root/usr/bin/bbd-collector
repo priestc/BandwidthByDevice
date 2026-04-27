@@ -26,9 +26,15 @@ CHAIN_IN="BBD_IN"
 CHAIN_OUT="BBD_OUT"
 NFT_PREV_DIR="$RUNTIME_DIR/nft_prev"
 PERSIST_BUF="$RUNTIME_DIR/persist_buf.jsonl"
+INTERVAL_FILE="$RUNTIME_DIR/interval"
 WAN_IFACE=""
 
 mkdir -p "$RUNTIME_DIR" "$PERSIST_DIR" "$NFT_PREV_DIR"
+
+# Seed interval from uci config; rpcd set_interval updates INTERVAL_FILE at runtime.
+_cfg_interval=$(uci -q get bandwidthbydevice.sampling.interval 2>/dev/null)
+INTERVAL=${_cfg_interval:-$INTERVAL}
+printf '%d\n' "$INTERVAL" > "$INTERVAL_FILE"
 
 log() { logger -t bbd-collector "$*"; }
 
@@ -400,6 +406,12 @@ setup_nft
 DAILY_FLUSH_HOUR=-1
 
 while true; do
+    # Pick up interval changes written by rpcd set_interval without a restart
+    if [ -f "$INTERVAL_FILE" ]; then
+        read -r _ni < "$INTERVAL_FILE"
+        [ -n "$_ni" ] && INTERVAL=$_ni
+    fi
+
     # Rebuild download rules if WAN interface changed (e.g. PPPoE reconnect)
     new_wan=$(get_wan_iface)
     if [ "$new_wan" != "$WAN_IFACE" ]; then

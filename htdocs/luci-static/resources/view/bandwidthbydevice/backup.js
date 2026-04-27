@@ -24,6 +24,17 @@ var callGetStatus = rpc.declare({
   method: 'get_backup_status'
 });
 
+var callGetStorageInfo = rpc.declare({
+  object: 'bandwidthbydevice',
+  method: 'get_storage_info'
+});
+
+var callSetInterval = rpc.declare({
+  object: 'bandwidthbydevice',
+  method: 'set_interval',
+  params: ['interval']
+});
+
 function injectCSS() {
   if (document.getElementById('bbd-styles')) return;
   var link = document.createElement('link');
@@ -38,6 +49,29 @@ function fmtTs(ts) {
   return new Date(ts * 1000).toLocaleString();
 }
 
+function fmtBytes(b) {
+  b = b || 0;
+  if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
+  if (b >= 1048576)    return (b / 1048576).toFixed(2) + ' MB';
+  if (b >= 1024)       return (b / 1024).toFixed(1) + ' KB';
+  return b + ' B';
+}
+
+function fmtInterval(secs) {
+  secs = parseInt(secs, 10) || 10;
+  if (secs < 60) return secs + ' second' + (secs === 1 ? '' : 's');
+  var m = Math.floor(secs / 60), s = secs % 60;
+  if (s === 0) return m + ' minute' + (m === 1 ? '' : 's');
+  return m + 'm ' + s + 's';
+}
+
+function fmtDuration(secs) {
+  if (secs < 60)   return secs + 's';
+  if (secs < 3600) return Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+  var h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
+  return h + 'h ' + m + 'm';
+}
+
 function setStatus(el, status, message, ts) {
   el.className = 'bbd-backup-status bbd-status-' + status;
   el.innerHTML = '';
@@ -47,55 +81,104 @@ function setStatus(el, status, message, ts) {
   if (ts) el.appendChild(E('span', { 'class': 'bbd-status-ts' }, ' — ' + fmtTs(ts)));
 }
 
+function renderStorageInfo(info) {
+  info = info || {};
+  var YEAR = 365 * 24 * 3600;
+
+  var elapsed = (info.buf_end_ts || 0) - (info.buf_start_ts || 0);
+  var hasRate  = elapsed >= 60 && (info.buf_size || 0) > 0;
+
+  var rawYearEl, rawRateEl, sumYearEl;
+
+  if (hasRate) {
+    var bps = info.buf_size / elapsed;                    // bytes/sec fill rate
+    rawYearEl = fmtBytes(Math.round(bps * YEAR));
+
+    var flushSec = (info.buf_limit_kb * 1024) / bps;     // seconds between flushes
+    var flushesPerYear = YEAR / flushSec;
+    var entryBytes = 60;                                  // ~60 B per summary entry
+    sumYearEl = Math.round(flushesPerYear) + ' entries/device (~' +
+      fmtBytes(Math.round(flushesPerYear * entryBytes)) + '/device)';
+
+    var ratePerHour = bps * 3600;
+    rawRateEl = fmtBytes(Math.round(ratePerHour)) + '/hr  ·  ' +
+      'flush every ~' + fmtDuration(Math.round(flushSec));
+  } else {
+    rawYearEl = sumYearEl = 'insufficient data for projection';
+    rawRateEl = '—';
+  }
+
+  function stat(label, value) {
+    return E('div', { 'class': 'bbd-storage-stat' }, [
+      E('span', { 'class': 'bbd-storage-label' }, label),
+      E('span', { 'class': 'bbd-storage-value' }, value)
+    ]);
+  }
+
+  var bufSince = info.buf_start_ts
+    ? new Date(info.buf_start_ts * 1000).toLocaleTimeString() +
+      ' (' + fmtDuration(Math.round(Date.now() / 1000 - info.buf_start_ts)) + ' ago)'
+    : '—';
+
+  return E('div', { 'class': 'bbd-storage-grid' }, [
+    E('div', { 'class': 'bbd-storage-col' }, [
+      E('h4', 'Raw 10-second buffer (RAM → remote)'),
+      stat('Current size',    fmtBytes(info.buf_size) + '  ·  ' + (info.buf_lines || 0).toLocaleString() + ' records'),
+      stat('Accumulating since', bufSince),
+      stat('Fill rate',       rawRateEl),
+      stat('Projected annual remote size', rawYearEl)
+    ]),
+    E('div', { 'class': 'bbd-storage-col' }, [
+      E('h4', 'Interval summaries (flash)'),
+      stat('Current size',    fmtBytes(info.summary_size) + '  ·  ' + (info.summary_count || 0) + ' device file' + ((info.summary_count === 1) ? '' : 's')),
+      stat('Max on-device',   '500 entries × ~60 B ≈ ' + fmtBytes(500 * 60) + ' per device'),
+      stat('Projected annual growth', sumYearEl)
+    ])
+  ]);
+}
+
 return view.extend({
   load: function() {
     return Promise.all([
       callGetConfig().catch(function() { return {}; }),
-      callGetStatus().catch(function() { return {}; })
+      callGetStatus().catch(function() { return {}; }),
+      callGetStorageInfo().catch(function() { return {}; })
     ]);
   },
 
   render: function(data) {
     injectCSS();
 
-    var cfg    = (data && data[0]) || {};
-    var status = (data && data[1]) || {};
+    var cfg     = (data && data[0]) || {};
+    var status  = (data && data[1]) || {};
+    var storage = (data && data[2]) || {};
 
-    var host       = E('input', { 'id': 'bbd-host',       'class': 'bbd-input', type: 'text',     value: cfg.host         || '', placeholder: 'e.g. 192.168.1.100 or nas.local' });
-    var port       = E('input', { 'id': 'bbd-port',       'class': 'bbd-input', type: 'number',   value: cfg.port         || '22', min: 1, max: 65535 });
-    var user       = E('input', { 'id': 'bbd-user',       'class': 'bbd-input', type: 'text',     value: cfg.username     || '', placeholder: 'username' });
-    var pass       = E('input', { 'id': 'bbd-pass',       'class': 'bbd-input', type: 'password', value: '',               placeholder: cfg.username ? '(unchanged)' : 'password' });
-    var rpath      = E('input', { 'id': 'bbd-rpath',      'class': 'bbd-input', type: 'text',     value: cfg.remote_path  || '', placeholder: '/ (home directory)' });
-    var autoBackup = E('input', { 'id': 'bbd-auto-backup','class': 'bbd-input', type: 'checkbox', checked: cfg.auto_backup === '1' ? '' : null });
+    // ── Server Settings ───────────────────────────────────────────────────────
+
+    var host       = E('input', { 'id': 'bbd-host',  'class': 'bbd-input', type: 'text',     value: cfg.host         || '', placeholder: 'e.g. 192.168.1.100 or nas.local' });
+    var port       = E('input', { 'id': 'bbd-port',  'class': 'bbd-input', type: 'number',   value: cfg.port         || '22', min: 1, max: 65535 });
+    var user       = E('input', { 'id': 'bbd-user',  'class': 'bbd-input', type: 'text',     value: cfg.username     || '', placeholder: 'username' });
+    var pass       = E('input', { 'id': 'bbd-pass',  'class': 'bbd-input', type: 'password', value: '',               placeholder: cfg.username ? '(unchanged)' : 'password' });
+    var rpath      = E('input', { 'id': 'bbd-rpath', 'class': 'bbd-input', type: 'text',     value: cfg.remote_path  || '', placeholder: '/ (home directory)' });
+    var autoBackup = E('input', { 'id': 'bbd-auto',  'class': 'bbd-input', type: 'checkbox', checked: cfg.auto_backup === '1' ? '' : null });
 
     var saveBtn    = E('button', { 'class': 'bbd-btn' },              'Save Settings');
     var persistBtn = E('button', { 'class': 'bbd-btn bbd-btn-primary' }, 'Persist Now');
 
-    var statusEl = E('div', { 'class': 'bbd-backup-status bbd-status-' + status.status });
+    var statusEl = E('div', { 'class': 'bbd-backup-status bbd-status-' + (status.status || 'never') });
     setStatus(statusEl, status.status || 'never', status.message || 'No data has been persisted yet', status.ts);
 
     saveBtn.addEventListener('click', function() {
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving…';
-      callSetConfig(
-        host.value,
-        port.value,
-        user.value,
-        pass.value || undefined,
-        rpath.value,
-        autoBackup.checked ? '1' : '0'
-      ).then(function() {
+      callSetConfig(host.value, port.value, user.value, pass.value || undefined,
+        rpath.value, autoBackup.checked ? '1' : '0')
+      .then(function() {
         saveBtn.textContent = 'Saved ✓';
         pass.placeholder = '(unchanged)';
         pass.value = '';
-        setTimeout(function() {
-          saveBtn.textContent = 'Save Settings';
-          saveBtn.disabled = false;
-        }, 2000);
-      }).catch(function() {
-        saveBtn.textContent = 'Error — try again';
-        saveBtn.disabled = false;
-      });
+        setTimeout(function() { saveBtn.textContent = 'Save Settings'; saveBtn.disabled = false; }, 2000);
+      }).catch(function() { saveBtn.textContent = 'Error — try again'; saveBtn.disabled = false; });
     });
 
     persistBtn.addEventListener('click', function() {
@@ -132,38 +215,72 @@ return view.extend({
     formDiv.appendChild(row('Remote Path',           rpath));
     formDiv.appendChild(row('Auto-persist (hourly)', autoBackup));
 
-    var hint = document.createElement('p');
-    hint.className = 'bbd-hint';
-    hint.textContent = 'Remote Path is the root directory for persisted data on the server. Leave blank to use the SSH home directory. sshpass must be installed on the router (opkg install sshpass).';
+    var hint = E('p', { 'class': 'bbd-hint' },
+      'Remote Path is the root directory for persisted data. Leave blank to use the SSH home directory. sshpass must be installed (opkg install sshpass).');
 
-    var settingsSection = document.createElement('div');
-    settingsSection.className = 'bbd-section';
-    var h3a = document.createElement('h3');
-    h3a.textContent = 'Server Settings';
-    settingsSection.appendChild(h3a);
-    settingsSection.appendChild(formDiv);
-    settingsSection.appendChild(hint);
-    settingsSection.appendChild(saveBtn);
+    var settingsSection = E('div', { 'class': 'bbd-section' }, [
+      E('h3', 'Server Settings'),
+      formDiv, hint, saveBtn
+    ]);
 
-    var actionRow = document.createElement('div');
-    actionRow.className = 'bbd-action-row';
-    actionRow.appendChild(persistBtn);
+    var persistSection = E('div', { 'class': 'bbd-section' }, [
+      E('h3', 'Remote Persistence'),
+      E('p', {}, 'Appends a per-device bandwidth record for the current hour to BandwidthByDevice_OpenWRT.jsonl on the remote server. Raw 10-second data flushes automatically to BandwidthByDevice_OpenWRT_raw.jsonl when the buffer limit is reached.'),
+      E('div', { 'class': 'bbd-action-row' }, [persistBtn]),
+      E('div', { 'class': 'bbd-status-label' }, 'Last operation:'),
+      statusEl
+    ]);
 
-    var statusLabel = document.createElement('div');
-    statusLabel.className = 'bbd-status-label';
-    statusLabel.textContent = 'Last operation:';
+    // ── Sampling Interval ─────────────────────────────────────────────────────
 
-    var persistSection = document.createElement('div');
-    persistSection.className = 'bbd-section';
-    var h3b = document.createElement('h3');
-    h3b.textContent = 'Remote Persistence';
-    var desc = document.createElement('p');
-    desc.textContent = 'Appends a per-device bandwidth record for the current hour to BandwidthByDevice_OpenWRT.jsonl on the remote server. When auto-persist is enabled this runs every hour, building a complete, ever-growing history file.';
-    persistSection.appendChild(h3b);
-    persistSection.appendChild(desc);
-    persistSection.appendChild(actionRow);
-    persistSection.appendChild(statusLabel);
-    persistSection.appendChild(statusEl);
+    var intervalInput = E('input', {
+      'class': 'bbd-input bbd-interval-input',
+      'type': 'number',
+      'min': '1', 'max': '1800',
+      'value': String(storage.interval || 10)
+    });
+    var intervalLabel = E('span', { 'class': 'bbd-interval-hint' },
+      fmtInterval(storage.interval || 10));
+    var intervalSaveBtn = E('button', { 'class': 'bbd-btn bbd-btn-primary' }, 'Set');
+
+    intervalInput.addEventListener('input', function() {
+      intervalLabel.textContent = fmtInterval(this.value);
+    });
+
+    intervalSaveBtn.addEventListener('click', function() {
+      var v = parseInt(intervalInput.value, 10);
+      if (isNaN(v) || v < 1 || v > 1800) return;
+      intervalSaveBtn.disabled = true;
+      intervalSaveBtn.textContent = 'Saving…';
+      callSetInterval(String(v)).then(function(res) {
+        intervalSaveBtn.textContent = res && res.result === 'ok' ? 'Set ✓' : 'Error';
+        setTimeout(function() { intervalSaveBtn.textContent = 'Set'; intervalSaveBtn.disabled = false; }, 2000);
+      }).catch(function() { intervalSaveBtn.textContent = 'Error'; intervalSaveBtn.disabled = false; });
+    });
+
+    var samplingSection = E('div', { 'class': 'bbd-section' }, [
+      E('h3', 'Sampling Interval'),
+      E('p', { 'class': 'bbd-hint' },
+        'How often the collector samples bandwidth. Shorter intervals give finer data but fill the raw buffer faster and increase router CPU load. Range: 1 second – 30 minutes.'),
+      E('div', { 'class': 'bbd-form-row' }, [
+        E('label', { 'class': 'bbd-form-label' }, 'Sample every'),
+        E('div', { 'style': 'display:flex;align-items:center;gap:8px;' }, [
+          intervalInput,
+          E('span', { 'class': 'bbd-form-label', 'style': 'width:auto;color:#555;' }, 'seconds'),
+          intervalLabel,
+          intervalSaveBtn
+        ])
+      ])
+    ]);
+
+    // ── Storage Info ──────────────────────────────────────────────────────────
+
+    var storageSection = E('div', { 'class': 'bbd-section' }, [
+      E('h3', 'Storage'),
+      renderStorageInfo(storage)
+    ]);
+
+    // ── Page assembly ─────────────────────────────────────────────────────────
 
     var page = document.createElement('div');
     var h2 = document.createElement('h2');
@@ -171,6 +288,8 @@ return view.extend({
     page.appendChild(h2);
     page.appendChild(settingsSection);
     page.appendChild(persistSection);
+    page.appendChild(samplingSection);
+    page.appendChild(storageSection);
     return page;
   },
 

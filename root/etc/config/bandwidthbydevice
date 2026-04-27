@@ -8,3 +8,6 @@ config backup 'backup'
 
 config persist 'persist'
 	option buf_limit_kb '2048'
+
+config sampling 'sampling'
+	option interval '10'

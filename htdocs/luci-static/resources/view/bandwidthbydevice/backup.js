@@ -247,15 +247,28 @@ return view.extend({
       intervalLabel.textContent = fmtInterval(this.value);
     });
 
+    var intervalErrEl = E('span', { 'class': 'bbd-hint', 'style': 'color:#dc2626;margin-left:8px;' }, '');
+
     intervalSaveBtn.addEventListener('click', function() {
       var v = parseInt(intervalInput.value, 10);
       if (isNaN(v) || v < 1 || v > 1800) return;
       intervalSaveBtn.disabled = true;
       intervalSaveBtn.textContent = 'Saving…';
+      intervalErrEl.textContent = '';
       callSetInterval(String(v)).then(function(res) {
-        intervalSaveBtn.textContent = res && res.result === 'ok' ? 'Set ✓' : 'Error';
-        setTimeout(function() { intervalSaveBtn.textContent = 'Set'; intervalSaveBtn.disabled = false; }, 2000);
-      }).catch(function() { intervalSaveBtn.textContent = 'Error'; intervalSaveBtn.disabled = false; });
+        if (res && res.result === 'ok') {
+          intervalSaveBtn.textContent = 'Set ✓';
+          setTimeout(function() { intervalSaveBtn.textContent = 'Set'; intervalSaveBtn.disabled = false; }, 2000);
+        } else {
+          intervalSaveBtn.textContent = 'Set';
+          intervalSaveBtn.disabled = false;
+          intervalErrEl.textContent = 'Error: ' + (res && res.message ? res.message : JSON.stringify(res));
+        }
+      }).catch(function(err) {
+        intervalSaveBtn.textContent = 'Set';
+        intervalSaveBtn.disabled = false;
+        intervalErrEl.textContent = 'Error: ' + (err && err.message ? err.message : String(err));
+      });
     });
 
     var samplingSection = E('div', { 'class': 'bbd-section' }, [
@@ -264,11 +277,12 @@ return view.extend({
         'How often the collector samples bandwidth. Shorter intervals give finer data but fill the raw buffer faster and increase router CPU load. Range: 1 second – 30 minutes.'),
       E('div', { 'class': 'bbd-form-row' }, [
         E('label', { 'class': 'bbd-form-label' }, 'Sample every'),
-        E('div', { 'style': 'display:flex;align-items:center;gap:8px;' }, [
+        E('div', { 'style': 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;' }, [
           intervalInput,
           E('span', { 'class': 'bbd-form-label', 'style': 'width:auto;color:#555;' }, 'seconds'),
           intervalLabel,
-          intervalSaveBtn
+          intervalSaveBtn,
+          intervalErrEl
         ])
       ])
     ]);

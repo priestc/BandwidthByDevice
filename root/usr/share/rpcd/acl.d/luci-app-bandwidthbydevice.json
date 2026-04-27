@@ -5,14 +5,14 @@
       "ubus": {
         "bandwidthbydevice": [
           "devices", "stats", "history",
-          "get_backup_config", "get_backup_status"
+          "get_backup_config", "get_backup_status", "get_storage_info"
         ]
       }
     },
     "write": {
       "ubus": {
         "bandwidthbydevice": [
-          "set_backup_config", "run_backup", "run_restore"
+          "set_backup_config", "run_backup", "run_restore", "set_interval"
         ]
       }
     }

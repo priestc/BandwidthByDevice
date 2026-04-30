@@ -1,13 +1,9 @@
 config backup 'backup'
-	option protocol 'sftp'
 	option host ''
 	option port '22'
 	option username ''
 	option password ''
 	option remote_path ''
-
-config persist 'persist'
-	option buf_limit_kb '2048'
-
-config sampling 'sampling'
-	option interval '10'
+	option mode 'none'
+	option smarthome_url ''
+	option smarthome_token ''

@@ -251,6 +251,26 @@
   color: #888;
 }
 
+.bbd-sm-log {
+  font-size: 0.85em;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: #f9fafb;
+}
+
+.bbd-sm-log-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 8px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.bbd-sm-log-row:last-child { border-bottom: none; }
+
+.bbd-sm-log-ts { color: #6b7280; }
+
 /* device detail */
 #bbd-device-header {
   margin-bottom: 1.5rem;

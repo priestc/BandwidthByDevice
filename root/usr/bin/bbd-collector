@@ -25,16 +25,9 @@ DEVICES_FILE="$PERSIST_DIR/known_devices"
 CHAIN_IN="BBD_IN"
 CHAIN_OUT="BBD_OUT"
 NFT_PREV_DIR="$RUNTIME_DIR/nft_prev"
-PERSIST_BUF="$RUNTIME_DIR/persist_buf.jsonl"
-INTERVAL_FILE="$RUNTIME_DIR/interval"
 WAN_IFACE=""
 
 mkdir -p "$RUNTIME_DIR" "$PERSIST_DIR" "$NFT_PREV_DIR"
-
-# Seed interval from uci config; rpcd set_interval updates INTERVAL_FILE at runtime.
-_cfg_interval=$(uci -q get bandwidthbydevice.sampling.interval 2>/dev/null)
-INTERVAL=${_cfg_interval:-$INTERVAL}
-printf '%d\n' "$INTERVAL" > "$INTERVAL_FILE"
 
 log() { logger -t bbd-collector "$*"; }
 
@@ -188,11 +181,14 @@ bytes_to_human() {
 write_current_json() {
     [ -f "$DEVICES_FILE" ] || return
     local tmpfile="$RUNTIME_DIR/current.json.tmp"
+    local smfile="$RUNTIME_DIR/smarthome_payload.json.tmp"
     local ts
     ts=$(date +%s)
 
     printf '{"ts":%d,"devices":[' "$ts" > "$tmpfile"
+    printf '{"ts":%d,"devices":[' "$ts" > "$smfile"
     local first=1
+    local sm_first=1
     while IFS=' ' read -r mac ip hostname; do
         [ -z "$mac" ] && continue
         local safemac
@@ -227,10 +223,13 @@ write_current_json() {
 
         if [ "$active" = "true" ]; then
             append_sample "$safemac" "$ts" "$down" "$up"
-            # Append non-zero intervals to the persistence buffer (tier-1 raw data).
             if [ "$down" -gt 0 ] 2>/dev/null || [ "$up" -gt 0 ] 2>/dev/null; then
-                printf '{"ts":%d,"mac":"%s","hostname":"%s","down":%s,"up":%s}\n' \
-                    "$ts" "$mac" "$hostname" "$down" "$up" >> "$PERSIST_BUF"
+                local safe_hn
+                safe_hn=$(printf '%s' "$hostname" | sed 's/\\/\\\\/g;s/"/\\"/g')
+                [ "$sm_first" -eq 0 ] && printf ',' >> "$smfile"
+                printf '{"mac":"%s","hostname":"%s","down":%s,"up":%s}' \
+                    "$mac" "$safe_hn" "$down" "$up" >> "$smfile"
+                sm_first=0
             fi
         fi
 
@@ -261,8 +260,10 @@ write_current_json() {
         first=0
     done < "$DEVICES_FILE"
     printf ']}\n' >> "$tmpfile"
+    printf ']}\n' >> "$smfile"
 
     mv "$tmpfile" "$RUNTIME_DIR/current.json"
+    mv "$smfile"  "$RUNTIME_DIR/smarthome_payload.json"
 }
 
 # ---- daily accumulator (in /tmp, flushed to flash hourly) -------------------
@@ -377,19 +378,6 @@ persist_daily_totals() {
     done < "$DEVICES_FILE"
 }
 
-# ---- persistence buffer flush trigger --------------------------------------
-
-check_persist_flush() {
-    [ -f "$PERSIST_BUF" ]              || return
-    [ -f "$RUNTIME_DIR/flush.lock" ]   && return  # already flushing
-    local limit_kb
-    limit_kb=$(uci -q get bandwidthbydevice.persist.buf_limit_kb 2>/dev/null)
-    limit_kb=${limit_kb:-2048}
-    local size_bytes
-    size_bytes=$(wc -c < "$PERSIST_BUF" 2>/dev/null)
-    [ $((${size_bytes:-0} / 1024)) -ge "$limit_kb" ] && /usr/bin/bbd-backup flush &
-}
-
 # ---- main loop --------------------------------------------------------------
 
 trap 'log "stopping"; teardown_nft; exit 0' TERM INT
@@ -406,12 +394,6 @@ setup_nft
 DAILY_FLUSH_HOUR=-1
 
 while true; do
-    # Pick up interval changes written by rpcd set_interval without a restart
-    if [ -f "$INTERVAL_FILE" ]; then
-        read -r _ni < "$INTERVAL_FILE"
-        [ -n "$_ni" ] && INTERVAL=$_ni
-    fi
-
     # Rebuild download rules if WAN interface changed (e.g. PPPoE reconnect)
     new_wan=$(get_wan_iface)
     if [ "$new_wan" != "$WAN_IFACE" ]; then
@@ -444,14 +426,43 @@ while true; do
 
     write_current_json
 
+    # Smart-home HTTP push — runs in background, logs response code
+    _sh_mode=$(uci -q get bandwidthbydevice.backup.mode 2>/dev/null)
+    if [ "$_sh_mode" = "smarthome" ]; then
+        _sh_url=$(uci -q get bandwidthbydevice.backup.smarthome_url 2>/dev/null)
+        if [ -n "$_sh_url" ]; then
+            _sh_token=$(uci -q get bandwidthbydevice.backup.smarthome_token 2>/dev/null)
+            _sh_payload=$(cat "$RUNTIME_DIR/smarthome_payload.json" 2>/dev/null)
+            _sh_log="$RUNTIME_DIR/smarthome_log.jsonl"
+            (
+                if ! which curl >/dev/null 2>&1; then
+                    printf '{"ts":%d,"code":0,"error":"curl not installed — run: opkg install curl"}\n' \
+                        "$(date +%s)" >> "$_sh_log"
+                elif [ -n "$_sh_token" ]; then
+                    _code=$(curl -s --max-time 8 -X POST "$_sh_url" \
+                        -H "Content-Type: application/json" \
+                        -H "Authorization: Bearer $_sh_token" \
+                        -d "$_sh_payload" -o /dev/null -w "%{http_code}" 2>/dev/null)
+                    printf '{"ts":%d,"code":%s}\n' "$(date +%s)" "${_code:-0}" >> "$_sh_log"
+                else
+                    _code=$(curl -s --max-time 8 -X POST "$_sh_url" \
+                        -H "Content-Type: application/json" \
+                        -d "$_sh_payload" -o /dev/null -w "%{http_code}" 2>/dev/null)
+                    printf '{"ts":%d,"code":%s}\n' "$(date +%s)" "${_code:-0}" >> "$_sh_log"
+                fi
+                _lines=$(wc -l < "$_sh_log" 2>/dev/null || echo 0)
+                [ "$_lines" -gt 20 ] && \
+                    tail -20 "$_sh_log" > "$_sh_log.tmp" && mv "$_sh_log.tmp" "$_sh_log"
+            ) &
+        fi
+    fi
+
     # Persist daily totals once per hour (on the hour)
     current_hour=$(date +%H | sed 's/^0//')
     if [ "$current_hour" != "$DAILY_FLUSH_HOUR" ]; then
         persist_daily_totals
         DAILY_FLUSH_HOUR="$current_hour"
     fi
-
-    check_persist_flush
 
     sleep "$INTERVAL"
 done

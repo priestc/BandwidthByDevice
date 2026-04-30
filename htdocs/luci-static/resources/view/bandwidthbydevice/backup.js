@@ -11,10 +11,10 @@ var callGetConfig = rpc.declare({
 var callSetConfig = rpc.declare({
   object: 'bandwidthbydevice',
   method: 'set_backup_config',
-  params: ['host', 'port', 'username', 'password', 'remote_path', 'auto_backup']
+  params: ['host', 'port', 'username', 'password', 'remote_path', 'mode', 'smarthome_url', 'smarthome_token']
 });
 
-var callRunPersist = rpc.declare({
+var callRunBackup = rpc.declare({
   object: 'bandwidthbydevice',
   method: 'run_backup'
 });
@@ -29,10 +29,19 @@ var callGetStorageInfo = rpc.declare({
   method: 'get_storage_info'
 });
 
-var callSetInterval = rpc.declare({
+var callGetBackupData = rpc.declare({
   object: 'bandwidthbydevice',
-  method: 'set_interval',
-  params: ['interval']
+  method: 'get_backup_data'
+});
+
+var callGetSmarthomeLog = rpc.declare({
+  object: 'bandwidthbydevice',
+  method: 'get_smarthome_log'
+});
+
+var callGetBackupLog = rpc.declare({
+  object: 'bandwidthbydevice',
+  method: 'get_backup_log'
 });
 
 function injectCSS() {
@@ -57,84 +66,13 @@ function fmtBytes(b) {
   return b + ' B';
 }
 
-function fmtInterval(secs) {
-  secs = parseInt(secs, 10) || 10;
-  if (secs < 60) return secs + ' second' + (secs === 1 ? '' : 's');
-  var m = Math.floor(secs / 60), s = secs % 60;
-  if (s === 0) return m + ' minute' + (m === 1 ? '' : 's');
-  return m + 'm ' + s + 's';
-}
-
-function fmtDuration(secs) {
-  if (secs < 60)   return secs + 's';
-  if (secs < 3600) return Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
-  var h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60);
-  return h + 'h ' + m + 'm';
-}
-
 function setStatus(el, status, message, ts) {
-  el.className = 'bbd-backup-status bbd-status-' + status;
+  el.className = 'bbd-backup-status bbd-status-' + (status || 'never');
   el.innerHTML = '';
   var icon = { ok: '✓', error: '✗', running: '…', never: '—' }[status] || '—';
   el.appendChild(E('strong', icon + ' '));
-  el.appendChild(document.createTextNode(message));
+  el.appendChild(document.createTextNode(message || ''));
   if (ts) el.appendChild(E('span', { 'class': 'bbd-status-ts' }, ' — ' + fmtTs(ts)));
-}
-
-function renderStorageInfo(info) {
-  info = info || {};
-  var YEAR = 365 * 24 * 3600;
-
-  var elapsed = (info.buf_end_ts || 0) - (info.buf_start_ts || 0);
-  var hasRate  = elapsed >= 60 && (info.buf_size || 0) > 0;
-
-  var rawYearEl, rawRateEl, sumYearEl;
-
-  if (hasRate) {
-    var bps = info.buf_size / elapsed;                    // bytes/sec fill rate
-    rawYearEl = fmtBytes(Math.round(bps * YEAR));
-
-    var flushSec = (info.buf_limit_kb * 1024) / bps;     // seconds between flushes
-    var flushesPerYear = YEAR / flushSec;
-    var entryBytes = 60;                                  // ~60 B per summary entry
-    sumYearEl = Math.round(flushesPerYear) + ' entries/device (~' +
-      fmtBytes(Math.round(flushesPerYear * entryBytes)) + '/device)';
-
-    var ratePerHour = bps * 3600;
-    rawRateEl = fmtBytes(Math.round(ratePerHour)) + '/hr  ·  ' +
-      'flush every ~' + fmtDuration(Math.round(flushSec));
-  } else {
-    rawYearEl = sumYearEl = 'insufficient data for projection';
-    rawRateEl = '—';
-  }
-
-  function stat(label, value) {
-    return E('div', { 'class': 'bbd-storage-stat' }, [
-      E('span', { 'class': 'bbd-storage-label' }, label),
-      E('span', { 'class': 'bbd-storage-value' }, value)
-    ]);
-  }
-
-  var bufSince = info.buf_start_ts
-    ? new Date(info.buf_start_ts * 1000).toLocaleTimeString() +
-      ' (' + fmtDuration(Math.round(Date.now() / 1000 - info.buf_start_ts)) + ' ago)'
-    : '—';
-
-  return E('div', { 'class': 'bbd-storage-grid' }, [
-    E('div', { 'class': 'bbd-storage-col' }, [
-      E('h4', 'Raw 10-second buffer (RAM → remote)'),
-      stat('Current size',    fmtBytes(info.buf_size) + '  ·  ' + (info.buf_lines || 0).toLocaleString() + ' records'),
-      stat('Accumulating since', bufSince),
-      stat('Fill rate',       rawRateEl),
-      stat('Projected annual remote size', rawYearEl)
-    ]),
-    E('div', { 'class': 'bbd-storage-col' }, [
-      E('h4', 'Interval summaries (flash)'),
-      stat('Current size',    fmtBytes(info.summary_size) + '  ·  ' + (info.summary_count || 0) + ' device file' + ((info.summary_count === 1) ? '' : 's')),
-      stat('Max on-device',   '500 entries × ~60 B ≈ ' + fmtBytes(500 * 60) + ' per device'),
-      stat('Projected annual growth', sumYearEl)
-    ])
-  ]);
 }
 
 return view.extend({
@@ -152,49 +90,97 @@ return view.extend({
     var cfg     = (data && data[0]) || {};
     var status  = (data && data[1]) || {};
     var storage = (data && data[2]) || {};
+    var mode    = cfg.mode || 'none';
 
-    // ── Server Settings ───────────────────────────────────────────────────────
+    // ── Download button ────────────────────────────────────────────────────────
 
-    var host       = E('input', { 'id': 'bbd-host',  'class': 'bbd-input', type: 'text',     value: cfg.host         || '', placeholder: 'e.g. 192.168.1.100 or nas.local' });
-    var port       = E('input', { 'id': 'bbd-port',  'class': 'bbd-input', type: 'number',   value: cfg.port         || '22', min: 1, max: 65535 });
-    var user       = E('input', { 'id': 'bbd-user',  'class': 'bbd-input', type: 'text',     value: cfg.username     || '', placeholder: 'username' });
-    var pass       = E('input', { 'id': 'bbd-pass',  'class': 'bbd-input', type: 'password', value: '',               placeholder: cfg.username ? '(unchanged)' : 'password' });
-    var rpath      = E('input', { 'id': 'bbd-rpath', 'class': 'bbd-input', type: 'text',     value: cfg.remote_path  || '', placeholder: '/ (home directory)' });
-    var autoBackup = E('input', { 'id': 'bbd-auto',  'class': 'bbd-input', type: 'checkbox', checked: cfg.auto_backup === '1' ? '' : null });
+    var fileSizeEl = E('span', { 'class': 'bbd-hint' },
+      'BandwidthByDevice.json · ' + fmtBytes(storage.file_bytes));
 
-    var saveBtn    = E('button', { 'class': 'bbd-btn' },              'Save Settings');
-    var persistBtn = E('button', { 'class': 'bbd-btn bbd-btn-primary' }, 'Persist Now');
+    var dlBtn = E('button', { 'class': 'bbd-btn bbd-btn-primary' }, '↓ Download Backup');
 
-    var statusEl = E('div', { 'class': 'bbd-backup-status bbd-status-' + (status.status || 'never') });
-    setStatus(statusEl, status.status || 'never', status.message || 'No data has been persisted yet', status.ts);
-
-    saveBtn.addEventListener('click', function() {
-      saveBtn.disabled = true;
-      saveBtn.textContent = 'Saving…';
-      callSetConfig(host.value, port.value, user.value, pass.value || undefined,
-        rpath.value, autoBackup.checked ? '1' : '0')
-      .then(function() {
-        saveBtn.textContent = 'Saved ✓';
-        pass.placeholder = '(unchanged)';
-        pass.value = '';
-        setTimeout(function() { saveBtn.textContent = 'Save Settings'; saveBtn.disabled = false; }, 2000);
-      }).catch(function() { saveBtn.textContent = 'Error — try again'; saveBtn.disabled = false; });
-    });
-
-    persistBtn.addEventListener('click', function() {
-      persistBtn.disabled = true;
-      persistBtn.textContent = 'Persisting…';
-      setStatus(statusEl, 'running', 'Persisting current hour…', null);
-      callRunPersist().then(function(result) {
-        setStatus(statusEl, result.status, result.message, result.ts);
-        persistBtn.textContent = 'Persist Now';
-        persistBtn.disabled = false;
-      }).catch(function() {
-        setStatus(statusEl, 'error', 'RPC call failed', null);
-        persistBtn.textContent = 'Persist Now';
-        persistBtn.disabled = false;
+    dlBtn.addEventListener('click', function() {
+      dlBtn.disabled = true;
+      dlBtn.textContent = 'Generating…';
+      callGetBackupData().then(function(result) {
+        dlBtn.textContent = '↓ Download Backup';
+        dlBtn.disabled = false;
+        if (!result || !result.data) {
+          ui.addNotification(null, E('p', 'Failed to generate backup file.'), 'error');
+          return;
+        }
+        var content = JSON.stringify(result.data, null, 2);
+        var blob = new Blob([content], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = result.filename || 'BandwidthByDevice.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        fileSizeEl.textContent = 'BandwidthByDevice.json · ' + fmtBytes(content.length);
+      }).catch(function(err) {
+        dlBtn.textContent = '↓ Download Backup';
+        dlBtn.disabled = false;
+        ui.addNotification(null,
+          E('p', 'Download failed: ' + (err && err.message ? err.message : String(err))),
+          'error');
       });
     });
+
+    var downloadSection = E('div', { 'class': 'bbd-section' }, [
+      E('h3', 'Backup File'),
+      E('p', { 'class': 'bbd-hint' },
+        'A snapshot of all device bandwidth history stored on this router. Contains daily totals for every known device.'),
+      E('div', { 'class': 'bbd-action-row', 'style': 'align-items:center;gap:12px;' }, [
+        dlBtn, fileSizeEl
+      ])
+    ]);
+
+    // ── Backup Mode ────────────────────────────────────────────────────────────
+
+    function makeRadio(id, value, label, checked) {
+      var radio = E('input', {
+        type: 'radio', name: 'bbd-mode', id: id, value: value,
+        checked: checked ? '' : null
+      });
+      return E('label', {
+        'for': id,
+        'style': 'display:flex;align-items:center;gap:6px;cursor:pointer;'
+      }, [radio, label]);
+    }
+
+    var modeSection = E('div', { 'class': 'bbd-section' }, [
+      E('h3', 'Backup Mode'),
+      E('div', { 'style': 'display:flex;flex-direction:column;gap:8px;' }, [
+        makeRadio('bbd-mode-none',      'none',      'None',           mode === 'none'),
+        makeRadio('bbd-mode-remote',    'remote',    'Auto Remote',    mode === 'remote'),
+        makeRadio('bbd-mode-smarthome', 'smarthome', 'Smart Home',     mode === 'smarthome')
+      ])
+    ]);
+
+    // ── Auto Remote Settings ───────────────────────────────────────────────────
+
+    var hostInput  = E('input', { 'class': 'bbd-input', type: 'text',
+      value: cfg.host || '', placeholder: 'e.g. 192.168.1.100 or nas.local' });
+    var portInput  = E('input', { 'class': 'bbd-input', type: 'number',
+      value: cfg.port || '22', min: 1, max: 65535 });
+    var userInput  = E('input', { 'class': 'bbd-input', type: 'text',
+      value: cfg.username || '', placeholder: 'username' });
+    var passInput  = E('input', { 'class': 'bbd-input', type: 'password',
+      value: '', placeholder: cfg.username ? '(unchanged)' : 'password' });
+    var rpathInput = E('input', { 'class': 'bbd-input', type: 'text',
+      value: cfg.remote_path || '', placeholder: '/ (home directory)' });
+
+    var saveBtn  = E('button', { 'class': 'bbd-btn' }, 'Save Settings');
+    var syncBtn  = E('button', { 'class': 'bbd-btn bbd-btn-primary' }, 'Sync Now');
+    var statusEl = E('div', { 'class': 'bbd-backup-status bbd-status-' + (status.status || 'never') });
+    setStatus(statusEl, status.status || 'never',
+      status.message || 'Not synced yet', status.ts);
+
+    var remoteSizeEl = E('span', { 'class': 'bbd-hint' },
+      status.file_bytes ? 'Last file: ' + fmtBytes(status.file_bytes) : '');
 
     function row(labelText, inputEl) {
       var d = document.createElement('div');
@@ -208,102 +194,234 @@ return view.extend({
     }
 
     var formDiv = document.createElement('div');
-    formDiv.appendChild(row('Host',                  host));
-    formDiv.appendChild(row('Port',                  port));
-    formDiv.appendChild(row('Username',              user));
-    formDiv.appendChild(row('Password',              pass));
-    formDiv.appendChild(row('Remote Path',           rpath));
-    formDiv.appendChild(row('Auto-persist (hourly)', autoBackup));
+    formDiv.appendChild(row('Host',        hostInput));
+    formDiv.appendChild(row('Port',        portInput));
+    formDiv.appendChild(row('Username',    userInput));
+    formDiv.appendChild(row('Password',    passInput));
+    formDiv.appendChild(row('Remote Path', rpathInput));
 
-    var hint = E('p', { 'class': 'bbd-hint' },
-      'Remote Path is the root directory for persisted data. Leave blank to use the SSH home directory. sshpass must be installed (opkg install sshpass).');
-
-    var settingsSection = E('div', { 'class': 'bbd-section' }, [
-      E('h3', 'Server Settings'),
-      formDiv, hint, saveBtn
-    ]);
-
-    var persistSection = E('div', { 'class': 'bbd-section' }, [
-      E('h3', 'Remote Persistence'),
-      E('p', {}, 'Appends a per-device bandwidth record for the current hour to BandwidthByDevice_OpenWRT.jsonl on the remote server. Raw 10-second data flushes automatically to BandwidthByDevice_OpenWRT_raw.jsonl when the buffer limit is reached.'),
-      E('div', { 'class': 'bbd-action-row' }, [persistBtn]),
-      E('div', { 'class': 'bbd-status-label' }, 'Last operation:'),
-      statusEl
-    ]);
-
-    // ── Sampling Interval ─────────────────────────────────────────────────────
-
-    var intervalInput = E('input', {
-      'class': 'bbd-input bbd-interval-input',
-      'type': 'number',
-      'min': '1', 'max': '1800',
-      'value': String(storage.interval || 10)
-    });
-    var intervalLabel = E('span', { 'class': 'bbd-interval-hint' },
-      fmtInterval(storage.interval || 10));
-    var intervalSaveBtn = E('button', { 'class': 'bbd-btn bbd-btn-primary' }, 'Set');
-
-    intervalInput.addEventListener('input', function() {
-      intervalLabel.textContent = fmtInterval(this.value);
-    });
-
-    var intervalErrEl = E('span', { 'class': 'bbd-hint', 'style': 'color:#dc2626;margin-left:8px;' }, '');
-
-    intervalSaveBtn.addEventListener('click', function() {
-      var v = parseInt(intervalInput.value, 10);
-      if (isNaN(v) || v < 1 || v > 1800) return;
-      intervalSaveBtn.disabled = true;
-      intervalSaveBtn.textContent = 'Saving…';
-      intervalErrEl.textContent = '';
-      callSetInterval(String(v)).then(function(res) {
-        if (res && res.result === 'ok') {
-          intervalSaveBtn.textContent = 'Set ✓';
-          setTimeout(function() { intervalSaveBtn.textContent = 'Set'; intervalSaveBtn.disabled = false; }, 2000);
-        } else {
-          intervalSaveBtn.textContent = 'Set';
-          intervalSaveBtn.disabled = false;
-          intervalErrEl.textContent = 'Error: ' + (res && res.message ? res.message : JSON.stringify(res));
-        }
+    saveBtn.addEventListener('click', function() {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+      callSetConfig(
+        hostInput.value, portInput.value, userInput.value,
+        passInput.value || undefined, rpathInput.value, 'remote'
+      ).then(function() {
+        saveBtn.textContent = 'Saved ✓';
+        passInput.placeholder = '(unchanged)';
+        passInput.value = '';
+        setTimeout(function() {
+          saveBtn.textContent = 'Save Settings';
+          saveBtn.disabled = false;
+        }, 2000);
       }).catch(function(err) {
-        intervalSaveBtn.textContent = 'Set';
-        intervalSaveBtn.disabled = false;
-        intervalErrEl.textContent = 'Error: ' + (err && err.message ? err.message : String(err));
+        saveBtn.textContent = 'Error — try again';
+        saveBtn.disabled = false;
+        ui.addNotification(null,
+          E('p', 'Save failed: ' + (err && err.message ? err.message : String(err))),
+          'error');
       });
     });
 
-    var samplingSection = E('div', { 'class': 'bbd-section' }, [
-      E('h3', 'Sampling Interval'),
+    var backupLogEl = E('div', { 'class': 'bbd-sm-log' },
+      E('span', { 'class': 'bbd-hint' }, 'No syncs yet.'));
+
+    function updateBackupLog() {
+      callGetBackupLog().then(function(result) {
+        var entries = (result && result.entries) || [];
+        backupLogEl.innerHTML = '';
+        if (!Array.isArray(entries) || entries.length === 0) {
+          backupLogEl.appendChild(E('span', { 'class': 'bbd-hint' }, 'No syncs yet.'));
+          return;
+        }
+        entries.slice().reverse().forEach(function(e) {
+          var ok    = e.status === 'ok';
+          var color = ok ? '#16a34a' : '#dc2626';
+          var row = E('div', { 'class': 'bbd-sm-log-row' }, [
+            E('span', { 'class': 'bbd-sm-log-ts' }, fmtTs(e.ts)),
+            E('span', { 'style': 'color:#555;font-size:0.85em;padding:0 0.5em;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' }, e.message || ''),
+            E('span', { 'style': 'color:' + color + ';font-weight:600;white-space:nowrap;' }, ok ? 'ok' : 'error')
+          ]);
+          backupLogEl.appendChild(row);
+        });
+      }).catch(function(err) {
+        ui.addNotification(null,
+          E('p', 'Failed to load backup log: ' + (err && err.message ? err.message : String(err))),
+          'error');
+      });
+    }
+
+    syncBtn.addEventListener('click', function() {
+      syncBtn.disabled = true;
+      syncBtn.textContent = 'Syncing…';
+      setStatus(statusEl, 'running', 'Syncing…', null);
+      callRunBackup().then(function(result) {
+        setStatus(statusEl, result.status, result.message, result.ts);
+        if (result.file_bytes) {
+          remoteSizeEl.textContent = 'Last file: ' + fmtBytes(result.file_bytes);
+        }
+        syncBtn.textContent = 'Sync Now';
+        syncBtn.disabled = false;
+        updateBackupLog();
+      }).catch(function(err) {
+        setStatus(statusEl, 'error',
+          'RPC call failed: ' + (err && err.message ? err.message : String(err)), null);
+        syncBtn.textContent = 'Sync Now';
+        syncBtn.disabled = false;
+      });
+    });
+
+    var remoteSection = E('div', {
+      'class': 'bbd-section',
+      'id': 'bbd-remote-section',
+      'style': mode === 'remote' ? '' : 'display:none'
+    }, [
+      E('h3', 'Auto Remote Settings'),
       E('p', { 'class': 'bbd-hint' },
-        'How often the collector samples bandwidth. Shorter intervals give finer data but fill the raw buffer faster and increase router CPU load. Range: 1 second – 30 minutes.'),
-      E('div', { 'class': 'bbd-form-row' }, [
-        E('label', { 'class': 'bbd-form-label' }, 'Sample every'),
-        E('div', { 'style': 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;' }, [
-          intervalInput,
-          E('span', { 'class': 'bbd-form-label', 'style': 'width:auto;color:#555;' }, 'seconds'),
-          intervalLabel,
-          intervalSaveBtn,
-          intervalErrEl
-        ])
-      ])
+        'The backup file is pushed to the remote server every hour via SCP, replacing the previous copy. Requires sshpass (opkg install sshpass).'),
+      formDiv,
+      saveBtn,
+      E('hr', { 'style': 'margin:16px 0;border:none;border-top:1px solid #e5e7eb;' }),
+      E('div', { 'class': 'bbd-action-row', 'style': 'align-items:center;gap:12px;' }, [
+        syncBtn, remoteSizeEl
+      ]),
+      E('h4', { 'style': 'margin:16px 0 6px;' }, 'Recent syncs'),
+      backupLogEl
     ]);
 
-    // ── Storage Info ──────────────────────────────────────────────────────────
+    // ── Smart Home panel ───────────────────────────────────────────────────────
 
-    var storageSection = E('div', { 'class': 'bbd-section' }, [
-      E('h3', 'Storage'),
-      renderStorageInfo(storage)
+    var shUrlInput   = E('input', { 'class': 'bbd-input', type: 'text',
+      value: cfg.smarthome_url   || '', placeholder: 'https://homeassistant.local/api/webhook/bbd' });
+    var shTokenInput = E('input', { 'class': 'bbd-input', type: 'password',
+      value: '',
+      placeholder: cfg.smarthome_url ? '(unchanged)' : 'optional — leave blank if not needed' });
+
+    var shSaveBtn  = E('button', { 'class': 'bbd-btn' }, 'Save Settings');
+    var shLogEl    = E('div', { 'class': 'bbd-sm-log' },
+      E('span', { 'class': 'bbd-hint' }, 'No requests sent yet.'));
+    var shLogTimer = null;
+
+    function updateSmarthomeLog() {
+      callGetSmarthomeLog().then(function(result) {
+        var entries = (result && result.entries) || [];
+        shLogEl.innerHTML = '';
+        if (!Array.isArray(entries) || entries.length === 0) {
+          shLogEl.appendChild(E('span', { 'class': 'bbd-hint' }, 'No requests sent yet.'));
+          return;
+        }
+        entries.slice().reverse().forEach(function(e) {
+          var code = parseInt(e.code, 10) || 0;
+          var ok   = code >= 200 && code < 300;
+          var color = ok ? '#16a34a' : '#dc2626';
+          var right = E('span', { 'style': 'color:' + color + ';font-weight:600;min-width:3em;text-align:right;' },
+            code === 0 ? 'error' : String(code));
+          var row = E('div', { 'class': 'bbd-sm-log-row' }, [
+            E('span', { 'class': 'bbd-sm-log-ts' }, fmtTs(e.ts)),
+            right
+          ]);
+          if (e.error) {
+            var hint = E('span', { 'style': 'color:#6b7280;font-size:0.85em;padding-left:0.5em;' }, e.error);
+            row.insertBefore(hint, right);
+          }
+          shLogEl.appendChild(row);
+        });
+      }).catch(function() { /* silent — log is best-effort */ });
+    }
+
+    shSaveBtn.addEventListener('click', function() {
+      shSaveBtn.disabled = true;
+      shSaveBtn.textContent = 'Saving…';
+      callSetConfig(
+        hostInput.value, portInput.value, userInput.value,
+        passInput.value || undefined, rpathInput.value,
+        'smarthome', shUrlInput.value, shTokenInput.value || undefined
+      ).then(function() {
+        shSaveBtn.textContent = 'Saved ✓';
+        shTokenInput.placeholder = '(unchanged)';
+        shTokenInput.value = '';
+        setTimeout(function() {
+          shSaveBtn.textContent = 'Save Settings';
+          shSaveBtn.disabled = false;
+        }, 2000);
+      }).catch(function(err) {
+        shSaveBtn.textContent = 'Error — try again';
+        shSaveBtn.disabled = false;
+        ui.addNotification(null,
+          E('p', 'Save failed: ' + (err && err.message ? err.message : String(err))),
+          'error');
+      });
+    });
+
+    var smarthomeSection = E('div', {
+      'class': 'bbd-section',
+      'id': 'bbd-smarthome-section',
+      'style': mode === 'smarthome' ? '' : 'display:none'
+    }, [
+      E('h3', 'Smart Home Integration'),
+      E('p', { 'class': 'bbd-hint' },
+        'POSTs active-device bandwidth to your smart-home server every 10 seconds. ' +
+        'Payload: {"ts":…,"devices":[{"mac":…,"hostname":…,"down":…,"up":…}]}. ' +
+        'Requires curl on the router (opkg install curl).'),
+      (function() {
+        var d = document.createElement('div');
+        d.appendChild(row('Server URL',   shUrlInput));
+        d.appendChild(row('Bearer Token', shTokenInput));
+        return d;
+      })(),
+      shSaveBtn,
+      E('h4', { 'style': 'margin:16px 0 6px;' }, 'Recent requests'),
+      shLogEl
     ]);
 
-    // ── Page assembly ─────────────────────────────────────────────────────────
+    // ── Mode change handler ────────────────────────────────────────────────────
+
+    modeSection.addEventListener('change', function(e) {
+      if (e.target.name !== 'bbd-mode') return;
+      var newMode = e.target.value;
+      document.getElementById('bbd-remote-section').style.display =
+        newMode === 'remote' ? '' : 'none';
+      document.getElementById('bbd-smarthome-section').style.display =
+        newMode === 'smarthome' ? '' : 'none';
+      if (newMode === 'smarthome') {
+        updateSmarthomeLog();
+        if (!shLogTimer) shLogTimer = setInterval(updateSmarthomeLog, 11000);
+      } else {
+        clearInterval(shLogTimer);
+        shLogTimer = null;
+      }
+      if (newMode === 'remote') {
+        updateBackupLog();
+      }
+      callSetConfig(
+        hostInput.value, portInput.value, userInput.value,
+        undefined, rpathInput.value, newMode,
+        shUrlInput.value, undefined
+      ).catch(function(err) {
+        ui.addNotification(null,
+          E('p', 'Failed to save mode: ' + (err && err.message ? err.message : String(err))),
+          'error');
+      });
+    });
+
+    if (mode === 'smarthome') {
+      updateSmarthomeLog();
+      shLogTimer = setInterval(updateSmarthomeLog, 11000);
+    }
+    if (mode === 'remote') {
+      updateBackupLog();
+    }
+
+    // ── Page assembly ──────────────────────────────────────────────────────────
 
     var page = document.createElement('div');
     var h2 = document.createElement('h2');
-    h2.textContent = 'Bandwidth by Device — Remote Persistence';
+    h2.textContent = 'Bandwidth by Device — Backup';
     page.appendChild(h2);
-    page.appendChild(settingsSection);
-    page.appendChild(persistSection);
-    page.appendChild(samplingSection);
-    page.appendChild(storageSection);
+    page.appendChild(downloadSection);
+    page.appendChild(modeSection);
+    page.appendChild(remoteSection);
+    page.appendChild(smarthomeSection);
     return page;
   },
 
